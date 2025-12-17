@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { deduplicateAccountsByEmail, type AccountMetadata } from "./storage";
 
 describe("deduplicateAccountsByEmail", () => {
