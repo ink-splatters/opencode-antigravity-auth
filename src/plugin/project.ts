@@ -5,7 +5,10 @@ import {
   ANTIGRAVITY_DEFAULT_PROJECT_ID,
 } from "../constants";
 import { formatRefreshParts, parseRefreshParts } from "./auth";
+import { createLogger } from "./logger";
 import type { OAuthAuthDetails, ProjectContextResult } from "./types";
+
+const log = createLogger("project");
 
 const projectContextResultCache = new Map<string, ProjectContextResult>();
 const projectContextPendingCache = new Map<string, Promise<ProjectContextResult>>();
@@ -165,7 +168,7 @@ export async function loadManagedProject(
 
       return (await response.json()) as LoadCodeAssistPayload;
     } catch (error) {
-      console.error(`Failed to load Antigravity managed project via ${baseEndpoint}:`, error);
+      log.debug("Failed to load managed project", { endpoint: baseEndpoint, error: String(error) });
       continue;
     }
   }
@@ -226,10 +229,7 @@ export async function onboardManagedProject(
           return projectId;
         }
       } catch (error) {
-        console.error(
-          `Failed to onboard Antigravity managed project via ${baseEndpoint}:`,
-          error,
-        );
+        log.debug("Failed to onboard managed project", { endpoint: baseEndpoint, error: String(error) });
         break;
       }
 

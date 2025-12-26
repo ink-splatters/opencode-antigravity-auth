@@ -2,6 +2,9 @@ import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { HeaderStyle } from "../constants";
+import { createLogger } from "./logger";
+
+const log = createLogger("storage");
 
 export type ModelFamily = "claude" | "gemini";
 export type { HeaderStyle };
@@ -146,35 +149,35 @@ export async function loadAccounts(): Promise<AccountStorageV3 | null> {
     const data = JSON.parse(content) as AnyAccountStorage;
 
     if (!Array.isArray(data.accounts)) {
-      console.warn("[opencode-antigravity-auth] Invalid storage format, ignoring");
+      log.warn("Invalid storage format, ignoring");
       return null;
     }
 
     let storage: AccountStorageV3;
 
     if (data.version === 1) {
-      console.info("[opencode-antigravity-auth] Migrating account storage from v1 to v3");
+      log.info("Migrating account storage from v1 to v3");
       const v2 = migrateV1ToV2(data);
       storage = migrateV2ToV3(v2);
       try {
         await saveAccounts(storage);
-        console.info("[opencode-antigravity-auth] Migration to v3 complete");
+        log.info("Migration to v3 complete");
       } catch (saveError) {
-        console.warn("[opencode-antigravity-auth] Failed to persist migrated storage:", saveError);
+        log.warn("Failed to persist migrated storage", { error: String(saveError) });
       }
     } else if (data.version === 2) {
-      console.info("[opencode-antigravity-auth] Migrating account storage from v2 to v3");
+      log.info("Migrating account storage from v2 to v3");
       storage = migrateV2ToV3(data);
       try {
         await saveAccounts(storage);
-        console.info("[opencode-antigravity-auth] Migration to v3 complete");
+        log.info("Migration to v3 complete");
       } catch (saveError) {
-        console.warn("[opencode-antigravity-auth] Failed to persist migrated storage:", saveError);
+        log.warn("Failed to persist migrated storage", { error: String(saveError) });
       }
     } else if (data.version === 3) {
       storage = data;
     } else {
-      console.warn("[opencode-antigravity-auth] Unknown storage version, ignoring", {
+      log.warn("Unknown storage version, ignoring", {
         version: (data as { version?: unknown }).version,
       });
       return null;
@@ -194,7 +197,7 @@ export async function loadAccounts(): Promise<AccountStorageV3 | null> {
     if (code === "ENOENT") {
       return null;
     }
-    console.error("[opencode-antigravity-auth] Failed to load account storage:", error);
+    log.error("Failed to load account storage", { error: String(error) });
     return null;
   }
 }
@@ -214,7 +217,7 @@ export async function clearAccounts(): Promise<void> {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
-      console.error("[opencode-antigravity-auth] Failed to clear account storage:", error);
+      log.error("Failed to clear account storage", { error: String(error) });
     }
   }
 }

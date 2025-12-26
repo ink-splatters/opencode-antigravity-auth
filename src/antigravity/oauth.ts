@@ -9,6 +9,9 @@ import {
   ANTIGRAVITY_LOAD_ENDPOINTS,
   ANTIGRAVITY_HEADERS,
 } from "../constants";
+import { createLogger } from "../plugin/logger";
+
+const log = createLogger("oauth");
 
 interface PkcePair {
   challenge: string;
@@ -171,7 +174,7 @@ async function fetchProjectID(accessToken: string): Promise<string> {
   }
 
   if (errors.length) {
-    console.warn("Failed to resolve Antigravity project via loadCodeAssist:", errors.join("; "));
+    log.warn("Failed to resolve Antigravity project via loadCodeAssist", { errors: errors.join("; ") });
   }
   return "";
 }

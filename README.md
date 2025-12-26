@@ -157,12 +157,17 @@ Merge model definitions into the user's config file (`~/.config/opencode/opencod
 # If jq is available, merge models programmatically
 if command -v jq &> /dev/null; then
     jq '.provider.google.models = {
-      "gemini-3-pro-high": {"name": "Gemini 3 Pro High (Antigravity)", "limit": {"context": 1048576, "output": 65535}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
       "gemini-3-pro-low": {"name": "Gemini 3 Pro Low (Antigravity)", "limit": {"context": 1048576, "output": 65535}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
+      "gemini-3-pro-medium": {"name": "Gemini 3 Pro Medium (Antigravity)", "limit": {"context": 1048576, "output": 65535}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
+      "gemini-3-pro-high": {"name": "Gemini 3 Pro High (Antigravity)", "limit": {"context": 1048576, "output": 65535}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
       "gemini-3-flash": {"name": "Gemini 3 Flash (Antigravity)", "limit": {"context": 1048576, "output": 65536}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
       "claude-sonnet-4-5": {"name": "Claude Sonnet 4.5 (Antigravity)", "limit": {"context": 200000, "output": 64000}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
-      "claude-sonnet-4-5-thinking": {"name": "Claude Sonnet 4.5 Thinking (Antigravity)", "limit": {"context": 200000, "output": 64000}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
-      "claude-opus-4-5-thinking": {"name": "Claude Opus 4.5 Thinking (Antigravity)", "limit": {"context": 200000, "output": 64000}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
+      "claude-sonnet-4-5-thinking-low": {"name": "Claude Sonnet 4.5 Thinking Low (Antigravity)", "limit": {"context": 200000, "output": 64000}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
+      "claude-sonnet-4-5-thinking-medium": {"name": "Claude Sonnet 4.5 Thinking Medium (Antigravity)", "limit": {"context": 200000, "output": 64000}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
+      "claude-sonnet-4-5-thinking-high": {"name": "Claude Sonnet 4.5 Thinking High (Antigravity)", "limit": {"context": 200000, "output": 64000}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
+      "claude-opus-4-5-thinking-low": {"name": "Claude Opus 4.5 Thinking Low (Antigravity)", "limit": {"context": 200000, "output": 64000}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
+      "claude-opus-4-5-thinking-medium": {"name": "Claude Opus 4.5 Thinking Medium (Antigravity)", "limit": {"context": 200000, "output": 64000}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
+      "claude-opus-4-5-thinking-high": {"name": "Claude Opus 4.5 Thinking High (Antigravity)", "limit": {"context": 200000, "output": 64000}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}},
       "gpt-oss-120b-medium": {"name": "GPT-OSS 120B Medium (Antigravity)", "limit": {"context": 131072, "output": 32768}, "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]}}
     } + (.provider.google.models // {})' ~/.config/opencode/opencode.json > /tmp/oc.json && mv /tmp/oc.json ~/.config/opencode/opencode.json
 fi
@@ -186,15 +191,34 @@ If successful, tell the user: **"Setup complete! You can now use Antigravity mod
 
 Add these models to your `~/.config/opencode/opencode.json` under `provider.google.models`:
 
+### Gemini Models
+
+| Model ID | Description | Thinking |
+|----------|-------------|----------|
+| `gemini-3-pro-low` | Gemini 3 Pro (low thinking) | thinkingLevel: "low" |
+| `gemini-3-pro-medium` | Gemini 3 Pro (medium thinking) | thinkingLevel: "medium" |
+| `gemini-3-pro-high` | Gemini 3 Pro (high thinking) | thinkingLevel: "high" |
+| `gemini-3-flash` | Gemini 3 Flash | Default |
+
+### Claude Models
+
+| Model ID | Description | Thinking Budget |
+|----------|-------------|-----------------|
+| `claude-sonnet-4-5` | Claude Sonnet 4.5 (no thinking) | None |
+| `claude-sonnet-4-5-thinking-low` | Claude Sonnet 4.5 Thinking | 8,192 tokens |
+| `claude-sonnet-4-5-thinking-medium` | Claude Sonnet 4.5 Thinking | 16,384 tokens |
+| `claude-sonnet-4-5-thinking-high` | Claude Sonnet 4.5 Thinking | 32,768 tokens |
+| `claude-opus-4-5-thinking-low` | Claude Opus 4.5 Thinking | 8,192 tokens |
+| `claude-opus-4-5-thinking-medium` | Claude Opus 4.5 Thinking | 16,384 tokens |
+| `claude-opus-4-5-thinking-high` | Claude Opus 4.5 Thinking | 32,768 tokens |
+
+### Other Models
+
 | Model ID | Description |
 |----------|-------------|
-| `gemini-3-pro-high` | Gemini 3 Pro High |
-| `gemini-3-pro-low` | Gemini 3 Pro Low |
-| `gemini-3-flash` | Gemini 3 Flash |
-| `claude-sonnet-4-5` | Claude Sonnet 4.5 |
-| `claude-sonnet-4-5-thinking` | Claude Sonnet 4.5 with thinking |
-| `claude-opus-4-5-thinking` | Claude Opus 4.5 with thinking |
 | `gpt-oss-120b-medium` | GPT-OSS 120B Medium |
+
+> **Tier suffixes:** Use `-low`, `-medium`, or `-high` to control thinking budget. Higher tiers = more reasoning tokens.
 
 <details>
 <summary><b>Full model configuration</b> (click to expand)</summary>
@@ -204,13 +228,18 @@ Add these models to your `~/.config/opencode/opencode.json` under `provider.goog
   "provider": {
     "google": {
       "models": {
-        "gemini-3-pro-high": {
-          "name": "Gemini 3 Pro High (Antigravity)",
+        "gemini-3-pro-low": {
+          "name": "Gemini 3 Pro Low (Antigravity)",
           "limit": { "context": 1048576, "output": 65535 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
-        "gemini-3-pro-low": {
-          "name": "Gemini 3 Pro Low (Antigravity)",
+        "gemini-3-pro-medium": {
+          "name": "Gemini 3 Pro Medium (Antigravity)",
+          "limit": { "context": 1048576, "output": 65535 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
+        },
+        "gemini-3-pro-high": {
+          "name": "Gemini 3 Pro High (Antigravity)",
           "limit": { "context": 1048576, "output": 65535 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
@@ -224,13 +253,33 @@ Add these models to your `~/.config/opencode/opencode.json` under `provider.goog
           "limit": { "context": 200000, "output": 64000 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
-        "claude-sonnet-4-5-thinking": {
-          "name": "Claude Sonnet 4.5 Thinking (Antigravity)",
+        "claude-sonnet-4-5-thinking-low": {
+          "name": "Claude Sonnet 4.5 Thinking Low (Antigravity)",
           "limit": { "context": 200000, "output": 64000 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
-        "claude-opus-4-5-thinking": {
-          "name": "Claude Opus 4.5 Thinking (Antigravity)",
+        "claude-sonnet-4-5-thinking-medium": {
+          "name": "Claude Sonnet 4.5 Thinking Medium (Antigravity)",
+          "limit": { "context": 200000, "output": 64000 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
+        },
+        "claude-sonnet-4-5-thinking-high": {
+          "name": "Claude Sonnet 4.5 Thinking High (Antigravity)",
+          "limit": { "context": 200000, "output": 64000 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
+        },
+        "claude-opus-4-5-thinking-low": {
+          "name": "Claude Opus 4.5 Thinking Low (Antigravity)",
+          "limit": { "context": 200000, "output": 64000 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
+        },
+        "claude-opus-4-5-thinking-medium": {
+          "name": "Claude Opus 4.5 Thinking Medium (Antigravity)",
+          "limit": { "context": 200000, "output": 64000 },
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
+        },
+        "claude-opus-4-5-thinking-high": {
+          "name": "Claude Opus 4.5 Thinking High (Antigravity)",
           "limit": { "context": 200000, "output": 64000 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },

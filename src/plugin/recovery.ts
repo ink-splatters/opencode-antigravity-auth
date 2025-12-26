@@ -10,6 +10,7 @@
  */
 
 import type { AntigravityConfig } from "./config";
+import { createLogger } from "./logger";
 import type { PluginClient } from "./types";
 import {
   readParts,
@@ -459,7 +460,8 @@ export function createSessionRecoveryHook(
 
       return success;
     } catch (err) {
-      console.error("[session-recovery] Recovery failed:", err);
+      const log = createLogger("session-recovery");
+      log.error("Recovery failed", { error: String(err) });
       return false;
     } finally {
       processingErrors.delete(assistantMsgID);

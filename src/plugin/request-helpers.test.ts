@@ -14,6 +14,9 @@ import {
   extractUsageFromSsePayload,
   rewriteAntigravityPreviewAccessError,
   DEFAULT_THINKING_BUDGET,
+  findOrphanedToolUseIds,
+  fixClaudeToolPairing,
+  validateAndFixClaudeToolPairing,
 } from "./request-helpers";
 
 describe("sanitizeThinkingPart (covered via filtering)", () => {
@@ -950,5 +953,157 @@ describe("rewriteAntigravityPreviewAccessError", () => {
     const body = { error: {} };
     const result = rewriteAntigravityPreviewAccessError(body, 404, "claude-3-sonnet");
     expect(result?.error?.message).toContain("preview access");
+  });
+});
+
+describe("findOrphanedToolUseIds", () => {
+  it("returns empty set when no tool_use blocks", () => {
+    const messages = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there!" },
+    ];
+    const result = findOrphanedToolUseIds(messages);
+    expect(result.size).toBe(0);
+  });
+
+  it("returns empty set when all tool_use have matching tool_result", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tool-1", name: "read", input: {} }],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-1", content: "ok" }],
+      },
+    ];
+    const result = findOrphanedToolUseIds(messages);
+    expect(result.size).toBe(0);
+  });
+
+  it("finds orphaned tool_use without matching tool_result", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tool-1", name: "read", input: {} },
+          { type: "tool_use", id: "tool-2", name: "bash", input: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-1", content: "ok" }],
+      },
+    ];
+    const result = findOrphanedToolUseIds(messages);
+    expect(result.size).toBe(1);
+    expect(result.has("tool-2")).toBe(true);
+  });
+});
+
+describe("fixClaudeToolPairing", () => {
+  it("does not modify messages without tool_use", () => {
+    const messages = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there!" },
+    ];
+    const result = fixClaudeToolPairing(messages);
+    expect(result).toEqual(messages);
+  });
+
+  it("does not modify properly paired tool calls", () => {
+    const messages = [
+      { role: "user", content: "Check file" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me check..." },
+          { type: "tool_use", id: "tool-1", name: "read", input: { path: "/foo" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-1", content: "file contents" }],
+      },
+    ];
+    const result = fixClaudeToolPairing(messages);
+    expect(result).toEqual(messages);
+  });
+
+  it("injects placeholder for single orphaned tool_use", () => {
+    const messages = [
+      { role: "user", content: "Check file" },
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tool-1", name: "read", input: {} }],
+      },
+      { role: "user", content: [{ type: "text", text: "continue" }] },
+    ];
+
+    const result = fixClaudeToolPairing(messages);
+
+    expect(result.length).toBe(3);
+    expect(result[2].content[0].type).toBe("tool_result");
+    expect(result[2].content[0].tool_use_id).toBe("tool-1");
+    expect(result[2].content[0].is_error).toBe(true);
+    expect(result[2].content[1].type).toBe("text");
+  });
+
+  it("handles multiple orphaned tools in same message", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tool-1", name: "read", input: {} },
+          { type: "tool_use", id: "tool-2", name: "bash", input: {} },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "continue" }] },
+    ];
+
+    const result = fixClaudeToolPairing(messages);
+
+    expect(result[1].content.length).toBe(3);
+    expect(result[1].content[0].tool_use_id).toBe("tool-1");
+    expect(result[1].content[1].tool_use_id).toBe("tool-2");
+    expect(result[1].content[2].type).toBe("text");
+  });
+
+  it("handles empty messages array", () => {
+    expect(fixClaudeToolPairing([])).toEqual([]);
+  });
+
+  it("handles non-array input", () => {
+    expect(fixClaudeToolPairing(null as any)).toEqual(null);
+    expect(fixClaudeToolPairing(undefined as any)).toEqual(undefined);
+  });
+});
+
+describe("validateAndFixClaudeToolPairing", () => {
+  it("returns messages unchanged when no orphans", () => {
+    const messages = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi!" },
+    ];
+    const result = validateAndFixClaudeToolPairing(messages);
+    expect(result).toEqual(messages);
+  });
+
+  it("fixes orphaned tool_use with placeholder", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tool-1", name: "bash", input: {} }],
+      },
+      { role: "user", content: [{ type: "text", text: "skip that" }] },
+    ];
+
+    const result = validateAndFixClaudeToolPairing(messages);
+    const orphans = findOrphanedToolUseIds(result);
+    expect(orphans.size).toBe(0);
+  });
+
+  it("handles empty array", () => {
+    expect(validateAndFixClaudeToolPairing([])).toEqual([]);
   });
 });

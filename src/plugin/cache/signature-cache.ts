@@ -23,6 +23,12 @@ import type { SignatureCacheConfig } from "../config";
 interface CacheEntry {
   value: string;
   timestamp: number;
+  /** Full thinking text content (optional, for recovery) */
+  thinkingText?: string;
+  /** Preview of the thinking text for debugging */
+  textPreview?: string;
+  /** Tool call IDs associated with this thinking block */
+  toolIds?: string[];
 }
 
 interface CacheData {
@@ -49,6 +55,15 @@ interface CacheStats {
   diskEnabled: boolean;
 }
 
+/**
+ * Full thinking content with signature (for recovery)
+ */
+export interface ThinkingCacheData {
+  text: string;
+  signature: string;
+  toolIds?: string[];
+}
+
 // =============================================================================
 // Path Utilities
 // =============================================================================
@@ -71,8 +86,8 @@ function getCacheFilePath(): string {
 // =============================================================================
 
 export class SignatureCache {
-  // In-memory cache: key -> (value, timestamp)
-  private cache: Map<string, { value: string; timestamp: number }> = new Map();
+  // In-memory cache: key -> entry with signature and optional thinking text
+  private cache: Map<string, CacheEntry> = new Map();
   
   // Configuration
   private memoryTtlMs: number;
@@ -166,6 +181,71 @@ export class SignatureCache {
     return age <= this.memoryTtlMs;
   }
 
+  // ===========================================================================
+  // Full Thinking Cache (ported from LLM-API-Key-Proxy)
+  // ===========================================================================
+
+  /**
+   * Store full thinking content with signature.
+   * This enables recovery even after thinking text is stripped by compaction.
+   * 
+   * Port of LLM-API-Key-Proxy's _cache_thinking()
+   */
+  storeThinking(
+    key: string,
+    thinkingText: string,
+    signature: string,
+    toolIds?: string[],
+  ): void {
+    if (!this.enabled || !thinkingText || !signature) return;
+
+    this.cache.set(key, {
+      value: signature,
+      timestamp: Date.now(),
+      thinkingText,
+      textPreview: thinkingText.slice(0, 100),
+      toolIds,
+    });
+    this.dirty = true;
+  }
+
+  /**
+   * Retrieve full thinking content by key.
+   * Returns null if not found or expired.
+   */
+  retrieveThinking(key: string): ThinkingCacheData | null {
+    if (!this.enabled) return null;
+
+    const entry = this.cache.get(key);
+    if (!entry || !entry.thinkingText) return null;
+
+    const age = Date.now() - entry.timestamp;
+    if (age > this.memoryTtlMs) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    this.stats.memoryHits++;
+    return {
+      text: entry.thinkingText,
+      signature: entry.value,
+      toolIds: entry.toolIds,
+    };
+  }
+
+  /**
+   * Check if full thinking content exists for a key.
+   */
+  hasThinking(key: string): boolean {
+    if (!this.enabled) return false;
+
+    const entry = this.cache.get(key);
+    if (!entry || !entry.thinkingText) return false;
+
+    const age = Date.now() - entry.timestamp;
+    return age <= this.memoryTtlMs;
+  }
+
   /**
    * Get cache statistics.
    */
@@ -221,7 +301,7 @@ export class SignatureCache {
       const data = JSON.parse(content) as CacheData;
 
       if (data.version !== "1.0") {
-        console.warn("[SignatureCache] Version mismatch, starting fresh");
+        // Version mismatch - silently start fresh
         return;
       }
 
@@ -242,14 +322,9 @@ export class SignatureCache {
         }
       }
 
-      if (loaded > 0 || expired > 0) {
-        console.log(`[SignatureCache] Loaded ${loaded} entries (${expired} expired)`);
-      }
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        console.warn("[SignatureCache] Cache file corrupted, starting fresh");
-      }
-      // Ignore other errors (file not found, etc.)
+      // Silently load - no console output
+    } catch {
+      // Silently start fresh on any error (corruption, file not found, etc.)
     }
   }
 
@@ -332,8 +407,8 @@ export class SignatureCache {
       this.stats.writes++;
       this.dirty = false;
       return true;
-    } catch (error) {
-      console.warn("[SignatureCache] Failed to save to disk:", error);
+    } catch {
+      // Silently fail - disk cache is optional
       return false;
     }
   }
@@ -374,9 +449,7 @@ export class SignatureCache {
       }
     }
 
-    if (cleaned > 0) {
-      console.log(`[SignatureCache] Cleaned ${cleaned} expired entries from memory`);
-    }
+    // Silently clean - no console output
   }
 }
 

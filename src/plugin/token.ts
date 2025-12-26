@@ -1,8 +1,11 @@
 import { ANTIGRAVITY_CLIENT_ID, ANTIGRAVITY_CLIENT_SECRET } from "../constants";
 import { formatRefreshParts, parseRefreshParts } from "./auth";
 import { clearCachedAuth, storeCachedAuth } from "./cache";
+import { createLogger } from "./logger";
 import { invalidateProjectContextCache } from "./project";
 import type { OAuthAuthDetails, PluginClient, RefreshParts } from "./types";
+
+const log = createLogger("token");
 
 interface OAuthErrorPayload {
   error?:
@@ -115,12 +118,10 @@ export async function refreshAccessToken(
       const details = [code, description ?? errorText].filter(Boolean).join(": ");
       const baseMessage = `Antigravity token refresh failed (${response.status} ${response.statusText})`;
       const message = details ? `${baseMessage} - ${details}` : baseMessage;
-      console.warn(`[Antigravity OAuth] ${message}`);
+      log.warn("Token refresh failed", { status: response.status, code, details });
 
       if (code === "invalid_grant") {
-        console.warn(
-          "[Antigravity OAuth] Google revoked the stored refresh token for this account. Reauthenticate it via `opencode auth login`.",
-        );
+        log.warn("Google revoked the stored refresh token - reauthentication required");
         invalidateProjectContextCache(auth.refresh);
         clearCachedAuth(auth.refresh);
       }
@@ -161,7 +162,7 @@ export async function refreshAccessToken(
     if (error instanceof AntigravityTokenRefreshError) {
       throw error;
     }
-    console.error("Failed to refresh Antigravity access token due to an unexpected error:", error);
+    log.error("Unexpected token refresh error", { error: String(error) });
     return undefined;
   }
 }

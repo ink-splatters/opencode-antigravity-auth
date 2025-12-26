@@ -118,6 +118,84 @@ export const AntigravityConfigSchema = z.object({
   signature_cache: SignatureCacheConfigSchema.optional(),
   
   // =========================================================================
+  // Empty Response Retry (ported from LLM-API-Key-Proxy)
+  // =========================================================================
+  
+  /**
+   * Maximum retry attempts when Antigravity returns an empty response.
+   * Empty responses occur when no candidates/choices are returned.
+   * 
+   * @default 4
+   */
+  empty_response_max_attempts: z.number().min(1).max(10).default(4),
+  
+  /**
+   * Delay in milliseconds between empty response retries.
+   * 
+   * @default 2000
+   */
+  empty_response_retry_delay_ms: z.number().min(500).max(10000).default(2000),
+  
+  // =========================================================================
+  // Tool ID Recovery (ported from LLM-API-Key-Proxy)
+  // =========================================================================
+  
+  /**
+   * Enable tool ID orphan recovery.
+   * When tool responses have mismatched IDs (due to context compaction),
+   * attempt to match them by function name or create placeholders.
+   * 
+   * @default true
+   */
+  tool_id_recovery: z.boolean().default(true),
+  
+  // =========================================================================
+  // Tool Hallucination Prevention (ported from LLM-API-Key-Proxy)
+  // =========================================================================
+  
+  /**
+   * Enable tool hallucination prevention for Claude models.
+   * When enabled, injects:
+   * - Parameter signatures into tool descriptions
+   * - System instruction with strict tool usage rules
+   * 
+   * This helps prevent Claude from using parameter names from its training
+   * data instead of the actual schema.
+   * 
+   * @default true
+   */
+  claude_tool_hardening: z.boolean().default(true),
+  
+  // =========================================================================
+  // Proactive Token Refresh (ported from LLM-API-Key-Proxy)
+  // =========================================================================
+  
+  /**
+   * Enable proactive background token refresh.
+   * When enabled, tokens are refreshed in the background before they expire,
+   * ensuring requests never block on token refresh.
+   * 
+   * @default true
+   */
+  proactive_token_refresh: z.boolean().default(true),
+  
+  /**
+   * Seconds before token expiry to trigger proactive refresh.
+   * Default is 30 minutes (1800 seconds).
+   * 
+   * @default 1800
+   */
+  proactive_refresh_buffer_seconds: z.number().min(60).max(7200).default(1800),
+  
+  /**
+   * Interval between proactive refresh checks in seconds.
+   * Default is 5 minutes (300 seconds).
+   * 
+   * @default 300
+   */
+  proactive_refresh_check_interval_seconds: z.number().min(30).max(1800).default(300),
+  
+  // =========================================================================
   // Auto-Update
   // =========================================================================
   
@@ -141,6 +219,13 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   session_recovery: true,
   auto_resume: true,
   resume_text: "continue",
+  empty_response_max_attempts: 4,
+  empty_response_retry_delay_ms: 2000,
+  tool_id_recovery: true,
+  claude_tool_hardening: true,
+  proactive_token_refresh: true,
+  proactive_refresh_buffer_seconds: 1800,
+  proactive_refresh_check_interval_seconds: 300,
   auto_update: true,
   signature_cache: {
     enabled: true,

@@ -13,6 +13,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { AntigravityConfigSchema, DEFAULT_CONFIG, type AntigravityConfig } from "./schema";
+import { createLogger } from "../logger";
+
+const log = createLogger("config");
 
 // =============================================================================
 // Path Utilities
@@ -64,19 +67,19 @@ function loadConfigFile(path: string): Partial<AntigravityConfig> | null {
     const result = AntigravityConfigSchema.partial().safeParse(rawConfig);
 
     if (!result.success) {
-      console.warn(
-        `[opencode-antigravity-auth] Config validation error in ${path}:`,
-        result.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join(", ")
-      );
+      log.warn("Config validation error", {
+        path,
+        issues: result.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join(", "),
+      });
       return null;
     }
 
     return result.data;
   } catch (error) {
     if (error instanceof SyntaxError) {
-      console.warn(`[opencode-antigravity-auth] Invalid JSON in ${path}:`, error.message);
+      log.warn("Invalid JSON in config file", { path, error: error.message });
     } else {
-      console.warn(`[opencode-antigravity-auth] Failed to load config from ${path}:`, error);
+      log.warn("Failed to load config file", { path, error: String(error) });
     }
     return null;
   }

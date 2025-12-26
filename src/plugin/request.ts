@@ -12,6 +12,7 @@ import {
   logAntigravityDebugResponse,
   type AntigravityDebugContext,
 } from "./debug";
+import { createLogger } from "./logger";
 import {
   cleanJSONSchemaForAntigravity,
   DEFAULT_THINKING_BUDGET,
@@ -19,6 +20,10 @@ import {
   extractThinkingConfig,
   extractUsageFromSsePayload,
   extractUsageMetadata,
+  fixToolResponseGrouping,
+  validateAndFixClaudeToolPairing,
+  injectParameterSignatures,
+  injectToolHardeningInstruction,
   isThinkingCapableModel,
   normalizeThinkingConfig,
   parseAntigravityApiBody,
@@ -28,11 +33,27 @@ import {
   type AntigravityApiBody,
 } from "./request-helpers";
 import {
+  CLAUDE_TOOL_SYSTEM_INSTRUCTION,
+  CLAUDE_DESCRIPTION_PROMPT,
+} from "../constants";
+import {
   analyzeConversationState,
   closeToolLoopForThinking,
   needsThinkingRecovery,
 } from "./thinking-recovery";
+import {
+  resolveModelWithTier,
+  isClaudeModel,
+  isClaudeThinkingModel,
+  configureClaudeToolConfig,
+  appendClaudeThinkingHint,
+  normalizeClaudeTools,
+  normalizeGeminiTools,
+  CLAUDE_THINKING_MAX_OUTPUT_TOKENS,
+} from "./transform";
 import { detectErrorType } from "./recovery";
+
+const log = createLogger("request");
 
 /**
  * Stable session ID for the plugin's lifetime.
@@ -40,9 +61,6 @@ import { detectErrorType } from "./recovery";
  * Generated once at plugin load time and reused for all requests.
  */
 const PLUGIN_SESSION_ID = `-${crypto.randomUUID()}`;
-
-// Claude thinking models need a sufficiently large max output token limit when thinking is enabled.
-const CLAUDE_THINKING_MAX_OUTPUT_TOKENS = 64_000;
 
 type SignedThinking = {
   text: string;
@@ -776,17 +794,19 @@ export function prepareAntigravityRequest(
   const [, rawModel = "", rawAction = ""] = match;
   const requestedModel = rawModel;
 
-  let upstreamModel = rawModel;
-  if (upstreamModel === "gemini-2.5-flash-image") {
-    upstreamModel = "gemini-2.5-flash";
-  }
+  // Use model resolver for tier-based thinking configuration
+  const resolved = resolveModelWithTier(rawModel);
+  const effectiveModel = resolved.actualModel;
 
-  const effectiveModel = upstreamModel;
   const streaming = rawAction === STREAM_ACTION;
   const baseEndpoint = endpointOverride ?? ANTIGRAVITY_ENDPOINT;
   const transformedUrl = `${baseEndpoint}/v1internal:${rawAction}${streaming ? "?alt=sse" : ""}`;
-  const isClaudeModel = upstreamModel.toLowerCase().includes("claude");
-  const isClaudeThinkingModel = isClaudeModel && upstreamModel.toLowerCase().includes("thinking");
+  const isClaude = isClaudeModel(effectiveModel);
+  const isClaudeThinking = isClaudeThinkingModel(effectiveModel);
+  
+  // Tier-based thinking configuration from model resolver
+  const tierThinkingBudget = resolved.thinkingBudget;
+  const tierThinkingLevel = resolved.thinkingLevel;
   let signatureSessionKey = buildSignatureSessionKey(
     PLUGIN_SESSION_ID,
     effectiveModel,
@@ -832,21 +852,21 @@ export function prepareAntigravityRequest(
           (req as any).sessionId = signatureSessionKey;
           stripInjectedDebugFromRequestPayload(req as Record<string, unknown>);
 
-          if (isClaudeModel) {
+          if (isClaude) {
             // Step 1: Strip corrupted/unsigned thinking blocks FIRST
             deepFilterThinkingBlocks(req, signatureSessionKey, getCachedSignature, true);
 
             // Step 2: THEN inject signed thinking from cache (after stripping)
-            if (isClaudeThinkingModel && Array.isArray((req as any).contents)) {
+            if (isClaudeThinking && Array.isArray((req as any).contents)) {
               (req as any).contents = ensureThinkingBeforeToolUseInContents((req as any).contents, signatureSessionKey);
             }
-            if (isClaudeThinkingModel && Array.isArray((req as any).messages)) {
+            if (isClaudeThinking && Array.isArray((req as any).messages)) {
               (req as any).messages = ensureThinkingBeforeToolUseInMessages((req as any).messages, signatureSessionKey);
             }
           }
         }
 
-        if (isClaudeThinkingModel && sessionId) {
+        if (isClaudeThinking && sessionId) {
           const hasToolUse = requestObjects.some((req) =>
             (Array.isArray((req as any).contents) && hasToolUseInContents((req as any).contents)) ||
             (Array.isArray((req as any).messages) && hasToolUseInMessages((req as any).messages)),
@@ -866,7 +886,7 @@ export function prepareAntigravityRequest(
         const rawGenerationConfig = requestPayload.generationConfig as Record<string, unknown> | undefined;
         const extraBody = requestPayload.extra_body as Record<string, unknown> | undefined;
 
-        if (isClaudeModel) {
+        if (isClaude) {
           if (!requestPayload.toolConfig) {
             requestPayload.toolConfig = {};
           }
@@ -888,30 +908,45 @@ export function prepareAntigravityRequest(
 
         const finalThinkingConfig = resolveThinkingConfig(
           userThinkingConfig,
-          isThinkingCapableModel(upstreamModel),
-          isClaudeModel,
+          resolved.isThinkingModel ?? isThinkingCapableModel(effectiveModel),
+          isClaude,
           hasAssistantHistory,
         );
 
         const normalizedThinking = normalizeThinkingConfig(finalThinkingConfig);
         if (normalizedThinking) {
-          const thinkingBudget = normalizedThinking.thinkingBudget;
-          const thinkingConfig: Record<string, unknown> = isClaudeThinkingModel
-            ? {
+          // Use tier-based thinking budget if specified via model suffix, otherwise fall back to user config
+          const thinkingBudget = tierThinkingBudget ?? normalizedThinking.thinkingBudget;
+          
+          // Build thinking config based on model type
+          let thinkingConfig: Record<string, unknown>;
+          
+          if (isClaudeThinking) {
+            // Claude uses snake_case keys
+            thinkingConfig = {
               include_thoughts: normalizedThinking.includeThoughts ?? true,
               ...(typeof thinkingBudget === "number" && thinkingBudget > 0
                 ? { thinking_budget: thinkingBudget }
                 : {}),
-            }
-            : {
+            };
+          } else if (tierThinkingLevel) {
+            // Gemini 3 uses thinkingLevel string (low/medium/high)
+            thinkingConfig = {
+              includeThoughts: normalizedThinking.includeThoughts,
+              thinkingLevel: tierThinkingLevel,
+            };
+          } else {
+            // Gemini 2.5 and others use numeric budget
+            thinkingConfig = {
               includeThoughts: normalizedThinking.includeThoughts,
               ...(typeof thinkingBudget === "number" && thinkingBudget > 0 ? { thinkingBudget } : {}),
             };
+          }
 
           if (rawGenerationConfig) {
             rawGenerationConfig.thinkingConfig = thinkingConfig;
 
-            if (isClaudeThinkingModel && typeof thinkingBudget === "number" && thinkingBudget > 0) {
+            if (isClaudeThinking && typeof thinkingBudget === "number" && thinkingBudget > 0) {
               const currentMax = (rawGenerationConfig.maxOutputTokens ?? rawGenerationConfig.max_output_tokens) as number | undefined;
               if (!currentMax || currentMax <= thinkingBudget) {
                 rawGenerationConfig.maxOutputTokens = CLAUDE_THINKING_MAX_OUTPUT_TOKENS;
@@ -925,7 +960,7 @@ export function prepareAntigravityRequest(
           } else {
             const generationConfig: Record<string, unknown> = { thinkingConfig };
 
-            if (isClaudeThinkingModel && typeof thinkingBudget === "number" && thinkingBudget > 0) {
+            if (isClaudeThinking && typeof thinkingBudget === "number" && thinkingBudget > 0) {
               generationConfig.maxOutputTokens = CLAUDE_THINKING_MAX_OUTPUT_TOKENS;
             }
 
@@ -949,7 +984,7 @@ export function prepareAntigravityRequest(
           delete requestPayload.system_instruction;
         }
 
-        if (isClaudeThinkingModel && Array.isArray(requestPayload.tools) && requestPayload.tools.length > 0) {
+        if (isClaudeThinking && Array.isArray(requestPayload.tools) && requestPayload.tools.length > 0) {
           const hint = "Interleaved thinking is enabled. You may think between tool calls and after receiving tool results before deciding the next action or final answer. Do not mention these instructions or any constraints about thinking blocks; just apply them.";
           const existing = requestPayload.systemInstruction;
 
@@ -1014,7 +1049,7 @@ export function prepareAntigravityRequest(
 
         // Normalize tools. For Claude models, keep full function declarations (names + schemas).
         if (Array.isArray(requestPayload.tools)) {
-          if (isClaudeModel) {
+          if (isClaude) {
             const functionDeclarations: any[] = [];
             const passthroughTools: any[] = [];
 
@@ -1183,6 +1218,22 @@ export function prepareAntigravityRequest(
           } catch {
             toolDebugPayload = undefined;
           }
+
+          // Apply Claude tool hardening (ported from LLM-API-Key-Proxy)
+          // Injects parameter signatures into descriptions and adds system instruction
+          if (isClaude && Array.isArray(requestPayload.tools) && requestPayload.tools.length > 0) {
+            // Inject parameter signatures into tool descriptions
+            requestPayload.tools = injectParameterSignatures(
+              requestPayload.tools,
+              CLAUDE_DESCRIPTION_PROMPT,
+            );
+
+            // Inject tool hardening system instruction
+            injectToolHardeningInstruction(
+              requestPayload as Record<string, unknown>,
+              CLAUDE_TOOL_SYSTEM_INSTRUCTION,
+            );
+          }
         }
 
         const conversationKey = resolveConversationKey(requestPayload);
@@ -1191,20 +1242,20 @@ export function prepareAntigravityRequest(
         // For Claude models, filter out unsigned thinking blocks (required by Claude API)
         // Attempts to restore signatures from cache for multi-turn conversations
         // Handle both Gemini-style contents[] and Anthropic-style messages[] payloads.
-        if (isClaudeModel) {
+        if (isClaude) {
           // Step 1: Strip corrupted/unsigned thinking blocks FIRST
           deepFilterThinkingBlocks(requestPayload, signatureSessionKey, getCachedSignature, true);
 
           // Step 2: THEN inject signed thinking from cache (after stripping)
-          if (isClaudeThinkingModel && Array.isArray(requestPayload.contents)) {
+          if (isClaudeThinking && Array.isArray(requestPayload.contents)) {
             requestPayload.contents = ensureThinkingBeforeToolUseInContents(requestPayload.contents, signatureSessionKey);
           }
-          if (isClaudeThinkingModel && Array.isArray(requestPayload.messages)) {
+          if (isClaudeThinking && Array.isArray(requestPayload.messages)) {
             requestPayload.messages = ensureThinkingBeforeToolUseInMessages(requestPayload.messages, signatureSessionKey);
           }
 
           // Step 3: Check if warmup needed (AFTER injection attempt)
-          if (isClaudeThinkingModel) {
+          if (isClaudeThinking) {
             const hasToolUse =
               (Array.isArray(requestPayload.contents) && hasToolUseInContents(requestPayload.contents)) ||
               (Array.isArray(requestPayload.messages) && hasToolUseInMessages(requestPayload.messages));
@@ -1219,7 +1270,7 @@ export function prepareAntigravityRequest(
         // For Claude models, ensure functionCall/tool use parts carry IDs (required by Anthropic).
         // We use a two-pass approach: first collect all functionCalls and assign IDs,
         // then match functionResponses to their corresponding calls using a FIFO queue per function name.
-        if (isClaudeModel && Array.isArray(requestPayload.contents)) {
+        if (isClaude && Array.isArray(requestPayload.contents)) {
           let toolCallCounter = 0;
           // Track pending call IDs per function name as a FIFO queue
           const pendingCallIdsByName = new Map<string, string[]>();
@@ -1273,6 +1324,18 @@ export function prepareAntigravityRequest(
 
             return { ...content, parts: newParts };
           });
+
+          // Third pass: Apply orphan recovery for mismatched tool IDs
+          // This handles cases where context compaction or other processes
+          // create ID mismatches between calls and responses.
+          // Ported from LLM-API-Key-Proxy's _fix_tool_response_grouping()
+          requestPayload.contents = fixToolResponseGrouping(requestPayload.contents as any[]);
+        }
+
+        // Fourth pass: Fix Claude format tool pairing (defense in depth)
+        // Handles orphaned tool_use blocks in Claude's messages[] format
+        if (Array.isArray(requestPayload.messages)) {
+          requestPayload.messages = validateAndFixClaudeToolPairing(requestPayload.messages);
         }
 
         // =====================================================================
@@ -1289,7 +1352,7 @@ export function prepareAntigravityRequest(
         //
         // The synthetic messages allow Claude to generate fresh thinking on the
         // new turn instead of failing with "Expected thinking but found text".
-        if (isClaudeThinkingModel && Array.isArray(requestPayload.contents)) {
+        if (isClaudeThinking && Array.isArray(requestPayload.contents)) {
           const conversationState = analyzeConversationState(requestPayload.contents);
 
           if (needsThinkingRecovery(conversationState)) {
@@ -1314,7 +1377,7 @@ export function prepareAntigravityRequest(
 
         const wrappedBody = {
           project: effectiveProjectId,
-          model: upstreamModel,
+          model: effectiveModel,
           request: requestPayload,
         };
 
@@ -1342,7 +1405,7 @@ export function prepareAntigravityRequest(
 
   // Add interleaved thinking header for Claude thinking models
   // This enables real-time streaming of thinking tokens
-  if (isClaudeThinkingModel) {
+  if (isClaudeThinking) {
     const existing = headers.get("anthropic-beta");
     const interleavedHeader = "interleaved-thinking-2025-05-14";
 
@@ -1373,7 +1436,7 @@ export function prepareAntigravityRequest(
     },
     streaming,
     requestedModel,
-    effectiveModel: upstreamModel,
+    effectiveModel: effectiveModel,
     projectId: resolvedProjectId,
     endpoint: transformedUrl,
     sessionId,
@@ -1388,9 +1451,9 @@ export function prepareAntigravityRequest(
 
 export function buildThinkingWarmupBody(
   bodyText: string | undefined,
-  isClaudeThinkingModel: boolean,
+  isClaudeThinking: boolean,
 ): string | null {
-  if (!bodyText || !isClaudeThinkingModel) {
+  if (!bodyText || !isClaudeThinking) {
     return null;
   }
 

@@ -1,4 +1,7 @@
 import { KEEP_THINKING_BLOCKS } from "../constants.js";
+import { createLogger } from "./logger";
+
+const log = createLogger("request-helpers");
 
 const ANTIGRAVITY_PREVIEW_LINK = "https://goo.gle/enable-preview-features"; // TODO: Update to Antigravity link if available
 
@@ -1153,6 +1156,19 @@ function transformGeminiCandidate(candidate: any): any {
       };
     }
 
+    // Handle functionCall: parse JSON strings in args
+    // (Ported from LLM-API-Key-Proxy's _extract_tool_call)
+    if (part.functionCall && part.functionCall.args) {
+      const parsedArgs = recursivelyParseJsonStrings(part.functionCall.args);
+      return {
+        ...part,
+        functionCall: {
+          ...part.functionCall,
+          args: parsedArgs,
+        },
+      };
+    }
+
     return part;
   });
 
@@ -1371,3 +1387,858 @@ function isAntigravityModel(target?: string): boolean {
   // Check for Antigravity models instead of Gemini 3
   return /antigravity/i.test(target) || /opus/i.test(target) || /claude/i.test(target);
 }
+
+// ============================================================================
+// EMPTY RESPONSE DETECTION (Ported from LLM-API-Key-Proxy)
+// ============================================================================
+
+/**
+ * Checks if a JSON response body represents an empty response.
+ * 
+ * Empty responses occur when:
+ * - No candidates in Gemini format
+ * - No choices in OpenAI format
+ * - Candidates/choices exist but have no content
+ * 
+ * @param text - The response body text (should be valid JSON)
+ * @returns true if the response is empty
+ */
+export function isEmptyResponseBody(text: string): boolean {
+  if (!text || !text.trim()) {
+    return true;
+  }
+
+  try {
+    const parsed = JSON.parse(text);
+    
+    // Check for empty candidates (Gemini/Antigravity format)
+    if (parsed.candidates !== undefined) {
+      if (!Array.isArray(parsed.candidates) || parsed.candidates.length === 0) {
+        return true;
+      }
+      
+      // Check if first candidate has empty content
+      const firstCandidate = parsed.candidates[0];
+      if (!firstCandidate) {
+        return true;
+      }
+      
+      // Check for empty parts in content
+      const content = firstCandidate.content;
+      if (!content || typeof content !== "object") {
+        return true;
+      }
+      
+      const parts = content.parts;
+      if (!Array.isArray(parts) || parts.length === 0) {
+        return true;
+      }
+      
+      // Check if all parts are empty (no text, no functionCall)
+      const hasContent = parts.some((part: any) => {
+        if (!part || typeof part !== "object") return false;
+        if (typeof part.text === "string" && part.text.length > 0) return true;
+        if (part.functionCall) return true;
+        if (part.thought === true && typeof part.text === "string") return true;
+        return false;
+      });
+      
+      if (!hasContent) {
+        return true;
+      }
+    }
+    
+    // Check for empty choices (OpenAI format - shouldn't occur but handle it)
+    if (parsed.choices !== undefined) {
+      if (!Array.isArray(parsed.choices) || parsed.choices.length === 0) {
+        return true;
+      }
+      
+      const firstChoice = parsed.choices[0];
+      if (!firstChoice) {
+        return true;
+      }
+      
+      // Check for empty message/delta
+      const message = firstChoice.message || firstChoice.delta;
+      if (!message) {
+        return true;
+      }
+      
+      // Check if message has content or tool_calls
+      if (!message.content && !message.tool_calls && !message.reasoning_content) {
+        return true;
+      }
+    }
+    
+    // Check response wrapper (Antigravity envelope)
+    if (parsed.response !== undefined) {
+      const response = parsed.response;
+      if (!response || typeof response !== "object") {
+        return true;
+      }
+      return isEmptyResponseBody(JSON.stringify(response));
+    }
+    
+    return false;
+  } catch {
+    // JSON parse error - treat as empty
+    return true;
+  }
+}
+
+/**
+ * Checks if a streaming SSE response yielded zero meaningful chunks.
+ * 
+ * This is used after consuming a streaming response to determine if retry is needed.
+ */
+export interface StreamingChunkCounter {
+  increment: () => void;
+  getCount: () => number;
+  hasContent: () => boolean;
+}
+
+export function createStreamingChunkCounter(): StreamingChunkCounter {
+  let count = 0;
+  let hasRealContent = false;
+
+  return {
+    increment: () => {
+      count++;
+    },
+    getCount: () => count,
+    hasContent: () => hasRealContent || count > 0,
+  };
+}
+
+/**
+ * Checks if an SSE line contains meaningful content.
+ * 
+ * @param line - A single SSE line (e.g., "data: {...}")
+ * @returns true if the line contains content worth counting
+ */
+export function isMeaningfulSseLine(line: string): boolean {
+  if (!line.startsWith("data: ")) {
+    return false;
+  }
+
+  const data = line.slice(6).trim();
+  
+  if (data === "[DONE]") {
+    return false;
+  }
+
+  if (!data) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(data);
+    
+    // Check for candidates with content
+    if (parsed.candidates && Array.isArray(parsed.candidates)) {
+      for (const candidate of parsed.candidates) {
+        const parts = candidate?.content?.parts;
+        if (Array.isArray(parts) && parts.length > 0) {
+          for (const part of parts) {
+            if (typeof part?.text === "string" && part.text.length > 0) return true;
+            if (part?.functionCall) return true;
+          }
+        }
+      }
+    }
+    
+    // Check response wrapper
+    if (parsed.response?.candidates) {
+      return isMeaningfulSseLine(`data: ${JSON.stringify(parsed.response)}`);
+    }
+    
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// ============================================================================
+// RECURSIVE JSON STRING AUTO-PARSING (Ported from LLM-API-Key-Proxy)
+// ============================================================================
+
+/**
+ * Recursively parses JSON strings in nested data structures.
+ * 
+ * This is a port of LLM-API-Key-Proxy's _recursively_parse_json_strings() function.
+ * 
+ * Handles:
+ * - JSON-stringified values: {"files": "[{...}]"} → {"files": [{...}]}
+ * - Malformed double-encoded JSON (extra trailing chars)
+ * - Escaped control characters (\\n → \n, \\t → \t)
+ * 
+ * This is useful because Antigravity sometimes returns JSON-stringified values
+ * in tool arguments, which can cause downstream parsing issues.
+ * 
+ * @param obj - The object to recursively parse
+ * @returns The parsed object with JSON strings expanded
+ */
+export function recursivelyParseJsonStrings(obj: unknown): unknown {
+  if (obj === null || obj === undefined) {
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map(recursivelyParseJsonStrings);
+  }
+
+  if (typeof obj === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = recursivelyParseJsonStrings(value);
+    }
+    return result;
+  }
+
+  if (typeof obj !== "string") {
+    return obj;
+  }
+
+  const stripped = obj.trim();
+
+  // Check if string contains control character escape sequences
+  // that need unescaping (\\n, \\t but NOT \\" or \\\\)
+  const hasControlCharEscapes = obj.includes("\\n") || obj.includes("\\t");
+  const hasIntentionalEscapes = obj.includes('\\"') || obj.includes("\\\\");
+
+  if (hasControlCharEscapes && !hasIntentionalEscapes) {
+    try {
+      // Use JSON.parse with quotes to unescape the string
+      return JSON.parse(`"${obj}"`);
+    } catch {
+      // Continue with original processing
+    }
+  }
+
+  // Check if it looks like JSON (starts with { or [)
+  if (stripped && (stripped[0] === "{" || stripped[0] === "[")) {
+    // Try standard parsing first
+    if (
+      (stripped.startsWith("{") && stripped.endsWith("}")) ||
+      (stripped.startsWith("[") && stripped.endsWith("]"))
+    ) {
+      try {
+        const parsed = JSON.parse(obj);
+        return recursivelyParseJsonStrings(parsed);
+      } catch {
+        // Continue
+      }
+    }
+
+    // Handle malformed JSON: array that doesn't end with ]
+    if (stripped.startsWith("[") && !stripped.endsWith("]")) {
+      try {
+        const lastBracket = stripped.lastIndexOf("]");
+        if (lastBracket > 0) {
+          const cleaned = stripped.slice(0, lastBracket + 1);
+          const parsed = JSON.parse(cleaned);
+          log.debug("Auto-corrected malformed JSON array", {
+            truncatedChars: stripped.length - cleaned.length,
+          });
+          return recursivelyParseJsonStrings(parsed);
+        }
+      } catch {
+        // Continue
+      }
+    }
+
+    // Handle malformed JSON: object that doesn't end with }
+    if (stripped.startsWith("{") && !stripped.endsWith("}")) {
+      try {
+        const lastBrace = stripped.lastIndexOf("}");
+        if (lastBrace > 0) {
+          const cleaned = stripped.slice(0, lastBrace + 1);
+          const parsed = JSON.parse(cleaned);
+          log.debug("Auto-corrected malformed JSON object", {
+            truncatedChars: stripped.length - cleaned.length,
+          });
+          return recursivelyParseJsonStrings(parsed);
+        }
+      } catch {
+        // Continue
+      }
+    }
+  }
+
+  return obj;
+}
+
+// ============================================================================
+// TOOL ID ORPHAN RECOVERY (Ported from LLM-API-Key-Proxy)
+// ============================================================================
+
+/**
+ * Groups function calls with their responses, handling ID mismatches.
+ * 
+ * This is a port of LLM-API-Key-Proxy's _fix_tool_response_grouping() function.
+ * 
+ * When context compaction or other processes strip tool responses, the tool call
+ * IDs become orphaned. This function attempts to recover by:
+ * 
+ * 1. Pass 1: Match by exact ID (normal case)
+ * 2. Pass 2: Match by function name (for ID mismatches)
+ * 3. Pass 3: Match "unknown_function" orphans or take first available
+ * 4. Fallback: Create placeholder responses for missing tool results
+ * 
+ * @param contents - Array of Gemini-style content messages
+ * @returns Fixed contents array with matched tool responses
+ */
+export function fixToolResponseGrouping(contents: any[]): any[] {
+  if (!Array.isArray(contents) || contents.length === 0) {
+    return contents;
+  }
+
+  const newContents: any[] = [];
+  
+  // Track pending tool call groups that need responses
+  const pendingGroups: Array<{
+    ids: string[];
+    funcNames: string[];
+    insertAfterIdx: number;
+  }> = [];
+  
+  // Collected orphan responses (by ID)
+  const collectedResponses = new Map<string, any>();
+  
+  for (const content of contents) {
+    const role = content.role;
+    const parts = content.parts || [];
+    
+    // Check if this is a tool response message
+    const responseParts = parts.filter((p: any) => p?.functionResponse);
+    
+    if (responseParts.length > 0) {
+      // Collect responses by ID (skip duplicates)
+      for (const resp of responseParts) {
+        const respId = resp.functionResponse?.id || "";
+        if (respId && !collectedResponses.has(respId)) {
+          collectedResponses.set(respId, resp);
+        }
+      }
+      
+      // Try to satisfy the most recent pending group
+      for (let i = pendingGroups.length - 1; i >= 0; i--) {
+        const group = pendingGroups[i]!;
+        if (group.ids.every(id => collectedResponses.has(id))) {
+          // All IDs found - build the response group
+          const groupResponses = group.ids.map(id => {
+            const resp = collectedResponses.get(id);
+            collectedResponses.delete(id);
+            return resp;
+          });
+          newContents.push({ parts: groupResponses, role: "user" });
+          pendingGroups.splice(i, 1);
+          break; // Only satisfy one group at a time
+        }
+      }
+      continue; // Don't add the original response message
+    }
+    
+    if (role === "model") {
+      // Check for function calls in this model message
+      const funcCalls = parts.filter((p: any) => p?.functionCall);
+      newContents.push(content);
+      
+      if (funcCalls.length > 0) {
+        const callIds = funcCalls
+          .map((fc: any) => fc.functionCall?.id || "")
+          .filter(Boolean);
+        const funcNames = funcCalls
+          .map((fc: any) => fc.functionCall?.name || "");
+        
+        if (callIds.length > 0) {
+          pendingGroups.push({
+            ids: callIds,
+            funcNames,
+            insertAfterIdx: newContents.length - 1,
+          });
+        }
+      }
+    } else {
+      newContents.push(content);
+    }
+  }
+  
+  // Handle remaining pending groups with orphan recovery
+  // Process in reverse order so insertions don't shift indices
+  pendingGroups.sort((a, b) => b.insertAfterIdx - a.insertAfterIdx);
+  
+  for (const group of pendingGroups) {
+    const groupResponses: any[] = [];
+    
+    for (let i = 0; i < group.ids.length; i++) {
+      const expectedId = group.ids[i]!;
+      const expectedName = group.funcNames[i] || "";
+      
+      if (collectedResponses.has(expectedId)) {
+        // Direct ID match - ideal case
+        groupResponses.push(collectedResponses.get(expectedId));
+        collectedResponses.delete(expectedId);
+      } else if (collectedResponses.size > 0) {
+        // Need to find an orphan response
+        let matchedId: string | null = null;
+        
+        // Pass 1: Match by function name
+        for (const [orphanId, orphanResp] of collectedResponses) {
+          const orphanName = orphanResp.functionResponse?.name || "";
+          if (orphanName === expectedName) {
+            matchedId = orphanId;
+            break;
+          }
+        }
+        
+        // Pass 2: Match "unknown_function" orphans
+        if (!matchedId) {
+          for (const [orphanId, orphanResp] of collectedResponses) {
+            if (orphanResp.functionResponse?.name === "unknown_function") {
+              matchedId = orphanId;
+              break;
+            }
+          }
+        }
+        
+        // Pass 3: Take first available
+        if (!matchedId) {
+          matchedId = collectedResponses.keys().next().value ?? null;
+        }
+        
+        if (matchedId) {
+          const orphanResp = collectedResponses.get(matchedId)!;
+          collectedResponses.delete(matchedId);
+          
+          // Fix the ID and name to match expected
+          orphanResp.functionResponse.id = expectedId;
+          if (orphanResp.functionResponse.name === "unknown_function" && expectedName) {
+            orphanResp.functionResponse.name = expectedName;
+          }
+          
+          log.debug("Auto-repaired tool ID mismatch", {
+            mappedFrom: matchedId,
+            mappedTo: expectedId,
+            functionName: expectedName,
+          });
+          
+          groupResponses.push(orphanResp);
+        }
+      } else {
+        // No responses available - create placeholder
+        const placeholder = {
+          functionResponse: {
+            name: expectedName || "unknown_function",
+            response: {
+              result: {
+                error: "Tool response was lost during context processing. " +
+                       "This is a recovered placeholder.",
+                recovered: true,
+              },
+            },
+            id: expectedId,
+          },
+        };
+        
+        log.debug("Created placeholder response for missing tool", {
+          id: expectedId,
+          name: expectedName,
+        });
+        
+        groupResponses.push(placeholder);
+      }
+    }
+    
+    if (groupResponses.length > 0) {
+      // Insert at correct position (after the model message that made the calls)
+      newContents.splice(group.insertAfterIdx + 1, 0, {
+        parts: groupResponses,
+        role: "user",
+      });
+    }
+  }
+  
+  return newContents;
+}
+
+/**
+ * Checks if contents have any tool call/response ID mismatches.
+ * 
+ * @param contents - Array of Gemini-style content messages
+ * @returns Object with mismatch details
+ */
+export function detectToolIdMismatches(contents: any[]): {
+  hasMismatches: boolean;
+  expectedIds: string[];
+  foundIds: string[];
+  missingIds: string[];
+  orphanIds: string[];
+} {
+  const expectedIds: string[] = [];
+  const foundIds: string[] = [];
+  
+  for (const content of contents) {
+    const parts = content.parts || [];
+    
+    for (const part of parts) {
+      if (part?.functionCall?.id) {
+        expectedIds.push(part.functionCall.id);
+      }
+      if (part?.functionResponse?.id) {
+        foundIds.push(part.functionResponse.id);
+      }
+    }
+  }
+  
+  const expectedSet = new Set(expectedIds);
+  const foundSet = new Set(foundIds);
+  
+  const missingIds = expectedIds.filter(id => !foundSet.has(id));
+  const orphanIds = foundIds.filter(id => !expectedSet.has(id));
+  
+  return {
+    hasMismatches: missingIds.length > 0 || orphanIds.length > 0,
+    expectedIds,
+    foundIds,
+    missingIds,
+    orphanIds,
+  };
+}
+
+// ============================================================================
+// CLAUDE FORMAT TOOL PAIRING (Defense in Depth)
+// ============================================================================
+
+/**
+ * Find orphaned tool_use IDs (tool_use without matching tool_result).
+ * Works on Claude format messages.
+ */
+export function findOrphanedToolUseIds(messages: any[]): Set<string> {
+  const toolUseIds = new Set<string>();
+  const toolResultIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === "tool_use" && block.id) {
+          toolUseIds.add(block.id);
+        }
+        if (block.type === "tool_result" && block.tool_use_id) {
+          toolResultIds.add(block.tool_use_id);
+        }
+      }
+    }
+  }
+
+  return new Set([...toolUseIds].filter((id) => !toolResultIds.has(id)));
+}
+
+/**
+ * Fix orphaned tool_use blocks in Claude format messages.
+ * Mirrors fixToolResponseGrouping() but for Claude's messages[] format.
+ *
+ * Claude format:
+ * - assistant message with content[]: { type: 'tool_use', id, name, input }
+ * - user message with content[]: { type: 'tool_result', tool_use_id, content }
+ *
+ * @param messages - Claude format messages array
+ * @returns Fixed messages with placeholder tool_results for orphans
+ */
+export function fixClaudeToolPairing(messages: any[]): any[] {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return messages;
+  }
+
+  // 1. Collect all tool_use IDs from assistant messages
+  const toolUseMap = new Map<string, { name: string; msgIndex: number }>();
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === "assistant" && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === "tool_use" && block.id) {
+          toolUseMap.set(block.id, { name: block.name || "unknown", msgIndex: i });
+        }
+      }
+    }
+  }
+
+  // 2. Collect all tool_result IDs from user messages
+  const toolResultIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (msg.role === "user" && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === "tool_result" && block.tool_use_id) {
+          toolResultIds.add(block.tool_use_id);
+        }
+      }
+    }
+  }
+
+  // 3. Find orphaned tool_use (no matching tool_result)
+  const orphans: Array<{ id: string; name: string; msgIndex: number }> = [];
+
+  for (const [id, info] of toolUseMap) {
+    if (!toolResultIds.has(id)) {
+      orphans.push({ id, ...info });
+    }
+  }
+
+  if (orphans.length === 0) {
+    return messages;
+  }
+
+  // 4. Group orphans by message index (insert after each assistant message)
+  const orphansByMsgIndex = new Map<number, typeof orphans>();
+  for (const orphan of orphans) {
+    const existing = orphansByMsgIndex.get(orphan.msgIndex) || [];
+    existing.push(orphan);
+    orphansByMsgIndex.set(orphan.msgIndex, existing);
+  }
+
+  // 5. Build new messages array with injected tool_results
+  const result: any[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    result.push(messages[i]);
+
+    const orphansForMsg = orphansByMsgIndex.get(i);
+    if (orphansForMsg && orphansForMsg.length > 0) {
+      // Check if next message is user with tool_result - if so, merge into it
+      const nextMsg = messages[i + 1];
+      if (nextMsg?.role === "user" && Array.isArray(nextMsg.content)) {
+        // Will be handled when we push nextMsg - add to its content
+        const placeholders = orphansForMsg.map((o) => ({
+          type: "tool_result",
+          tool_use_id: o.id,
+          content: `[Tool "${o.name}" execution was cancelled or failed]`,
+          is_error: true,
+        }));
+        // Prepend placeholders to next message's content
+        nextMsg.content = [...placeholders, ...nextMsg.content];
+      } else {
+        // Inject new user message with placeholder tool_results
+        result.push({
+          role: "user",
+          content: orphansForMsg.map((o) => ({
+            type: "tool_result",
+            tool_use_id: o.id,
+            content: `[Tool "${o.name}" execution was cancelled or failed]`,
+            is_error: true,
+          })),
+        });
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Nuclear option: Remove orphaned tool_use blocks entirely.
+ * Called when fixClaudeToolPairing() fails to pair all tools.
+ */
+function removeOrphanedToolUse(messages: any[], orphanIds: Set<string>): any[] {
+  return messages
+    .map((msg) => {
+      if (msg.role === "assistant" && Array.isArray(msg.content)) {
+        return {
+          ...msg,
+          content: msg.content.filter(
+            (block: any) => block.type !== "tool_use" || !orphanIds.has(block.id)
+          ),
+        };
+      }
+      return msg;
+    })
+    .filter(
+      (msg) =>
+        // Remove empty assistant messages
+        !(msg.role === "assistant" && Array.isArray(msg.content) && msg.content.length === 0)
+    );
+}
+
+/**
+ * Validate and fix tool pairing with fallback nuclear option.
+ * Defense in depth: tries gentle fix first, then nuclear removal.
+ */
+export function validateAndFixClaudeToolPairing(messages: any[]): any[] {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return messages;
+  }
+
+  // First: Try gentle fix (inject placeholder tool_results)
+  let fixed = fixClaudeToolPairing(messages);
+
+  // Second: Validate - find any remaining orphans
+  const orphanIds = findOrphanedToolUseIds(fixed);
+
+  if (orphanIds.size === 0) {
+    return fixed;
+  }
+
+  // Third: Nuclear option - remove orphaned tool_use entirely
+  // This should rarely happen, but provides defense in depth
+  console.warn("[antigravity] fixClaudeToolPairing left orphans, applying nuclear option", {
+    orphanIds: [...orphanIds],
+  });
+
+  return removeOrphanedToolUse(fixed, orphanIds);
+}
+
+// ============================================================================
+// TOOL HALLUCINATION PREVENTION (Ported from LLM-API-Key-Proxy)
+// ============================================================================
+
+/**
+ * Formats a type hint for a property schema.
+ * Port of LLM-API-Key-Proxy's _format_type_hint()
+ */
+function formatTypeHint(propData: Record<string, unknown>, depth = 0): string {
+  const type = propData.type as string ?? "unknown";
+
+  // Handle enum values
+  if (propData.enum && Array.isArray(propData.enum)) {
+    const enumVals = propData.enum as unknown[];
+    if (enumVals.length <= 5) {
+      return `string ENUM[${enumVals.map(v => JSON.stringify(v)).join(", ")}]`;
+    }
+    return `string ENUM[${enumVals.length} options]`;
+  }
+
+  // Handle const values
+  if (propData.const !== undefined) {
+    return `string CONST=${JSON.stringify(propData.const)}`;
+  }
+
+  if (type === "array") {
+    const items = propData.items as Record<string, unknown> | undefined;
+    if (items && typeof items === "object") {
+      const itemType = items.type as string ?? "unknown";
+      if (itemType === "object") {
+        const nestedProps = items.properties as Record<string, unknown> | undefined;
+        const nestedReq = items.required as string[] | undefined ?? [];
+        if (nestedProps && depth < 1) {
+          const nestedList = Object.entries(nestedProps).map(([n, d]) => {
+            const t = (d as Record<string, unknown>).type as string ?? "unknown";
+            const req = nestedReq.includes(n) ? " REQUIRED" : "";
+            return `${n}: ${t}${req}`;
+          });
+          return `ARRAY_OF_OBJECTS[${nestedList.join(", ")}]`;
+        }
+        return "ARRAY_OF_OBJECTS";
+      }
+      return `ARRAY_OF_${itemType.toUpperCase()}`;
+    }
+    return "ARRAY";
+  }
+
+  if (type === "object") {
+    const nestedProps = propData.properties as Record<string, unknown> | undefined;
+    const nestedReq = propData.required as string[] | undefined ?? [];
+    if (nestedProps && depth < 1) {
+      const nestedList = Object.entries(nestedProps).map(([n, d]) => {
+        const t = (d as Record<string, unknown>).type as string ?? "unknown";
+        const req = nestedReq.includes(n) ? " REQUIRED" : "";
+        return `${n}: ${t}${req}`;
+      });
+      return `object{${nestedList.join(", ")}}`;
+    }
+  }
+
+  return type;
+}
+
+/**
+ * Injects parameter signatures into tool descriptions.
+ * Port of LLM-API-Key-Proxy's _inject_signature_into_descriptions()
+ * 
+ * This helps prevent tool hallucination by explicitly listing parameters
+ * in the description, making it harder for the model to hallucinate
+ * parameters from its training data.
+ * 
+ * @param tools - Array of tool definitions (Gemini format)
+ * @param promptTemplate - Template for the signature (default: "\\n\\nSTRICT PARAMETERS: {params}.")
+ * @returns Modified tools array with signatures injected
+ */
+export function injectParameterSignatures(
+  tools: any[],
+  promptTemplate = "\n\n⚠️ STRICT PARAMETERS: {params}.",
+): any[] {
+  if (!tools || !Array.isArray(tools)) return tools;
+
+  return tools.map((tool) => {
+    const declarations = tool.functionDeclarations;
+    if (!Array.isArray(declarations)) return tool;
+
+    const newDeclarations = declarations.map((decl: any) => {
+      const schema = decl.parameters || decl.parametersJsonSchema;
+      if (!schema) return decl;
+
+      const required = schema.required as string[] ?? [];
+      const properties = schema.properties as Record<string, unknown> ?? {};
+
+      if (Object.keys(properties).length === 0) return decl;
+
+      const paramList = Object.entries(properties).map(([propName, propData]) => {
+        const typeHint = formatTypeHint(propData as Record<string, unknown>);
+        const isRequired = required.includes(propName);
+        return `${propName} (${typeHint}${isRequired ? ", REQUIRED" : ""})`;
+      });
+
+      const sigStr = promptTemplate.replace("{params}", paramList.join(", "));
+      
+      return {
+        ...decl,
+        description: (decl.description || "") + sigStr,
+      };
+    });
+
+    return { ...tool, functionDeclarations: newDeclarations };
+  });
+}
+
+/**
+ * Injects a tool hardening system instruction into the request payload.
+ * Port of LLM-API-Key-Proxy's _inject_tool_hardening_instruction()
+ * 
+ * @param payload - The Gemini request payload
+ * @param instructionText - The instruction text to inject
+ */
+export function injectToolHardeningInstruction(
+  payload: Record<string, unknown>,
+  instructionText: string,
+): void {
+  if (!instructionText) return;
+
+  const instructionPart = { text: instructionText };
+
+  if (payload.systemInstruction) {
+    const existing = payload.systemInstruction as Record<string, unknown>;
+    if (existing && typeof existing === "object" && "parts" in existing) {
+      const parts = existing.parts as unknown[];
+      if (Array.isArray(parts)) {
+        parts.unshift(instructionPart);
+      }
+    } else if (typeof existing === "string") {
+      payload.systemInstruction = {
+        role: "user",
+        parts: [instructionPart, { text: existing }],
+      };
+    } else {
+      payload.systemInstruction = {
+        role: "user",
+        parts: [instructionPart],
+      };
+    }
+  } else {
+    payload.systemInstruction = {
+      role: "user",
+      parts: [instructionPart],
+    };
+  }
+}
+
