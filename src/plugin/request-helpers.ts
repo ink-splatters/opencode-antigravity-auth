@@ -448,26 +448,33 @@ function flattenTypeArrays(schema: any, nullableFields?: Map<string, string[]>, 
 
 /**
  * Phase 3: Removes unsupported keywords after hints have been extracted.
+ * @param insideProperties - When true, keys are property NAMES (preserve); when false, keys are JSON Schema keywords (filter).
  */
-function removeUnsupportedKeywords(schema: any): any {
+function removeUnsupportedKeywords(schema: any, insideProperties: boolean = false): any {
   if (!schema || typeof schema !== "object") {
     return schema;
   }
 
   if (Array.isArray(schema)) {
-    return schema.map(item => removeUnsupportedKeywords(item));
+    return schema.map(item => removeUnsupportedKeywords(item, false));
   }
 
   const result: any = {};
   for (const [key, value] of Object.entries(schema)) {
-    // Skip unsupported keywords
-    if ((UNSUPPORTED_KEYWORDS as readonly string[]).includes(key)) {
+    if (!insideProperties && (UNSUPPORTED_KEYWORDS as readonly string[]).includes(key)) {
       continue;
     }
 
-    // Recursively process nested objects
     if (typeof value === "object" && value !== null) {
-      result[key] = removeUnsupportedKeywords(value);
+      if (key === "properties") {
+        const propertiesResult: any = {};
+        for (const [propName, propSchema] of Object.entries(value as object)) {
+          propertiesResult[propName] = removeUnsupportedKeywords(propSchema, false);
+        }
+        result[key] = propertiesResult;
+      } else {
+        result[key] = removeUnsupportedKeywords(value, false);
+      }
     } else {
       result[key] = value;
     }
