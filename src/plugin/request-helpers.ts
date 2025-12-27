@@ -934,11 +934,22 @@ function sanitizeThinkingPart(part: Record<string, unknown>): Record<string, unk
   return stripCacheControlRecursively(part) as Record<string, unknown>;
 }
 
+function findLastAssistantIndex(contents: any[], roleValue: "model" | "assistant"): number {
+  for (let i = contents.length - 1; i >= 0; i--) {
+    const content = contents[i];
+    if (content && typeof content === "object" && content.role === roleValue) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function filterContentArray(
   contentArray: any[],
   sessionId?: string,
   getCachedSignatureFn?: (sessionId: string, text: string) => string | undefined,
   isClaudeModel?: boolean,
+  isLastAssistantMessage?: boolean,
 ): any[] {
   // For Claude models, strip thinking blocks by default for reliability
   // User can opt-in to keep thinking via OPENCODE_ANTIGRAVITY_KEEP_THINKING=1
@@ -963,6 +974,14 @@ function filterContentArray(
     const hasSignature = hasSignatureField(item);
 
     if (!isThinking && !hasSignature) {
+      filtered.push(item);
+      continue;
+    }
+
+    // CRITICAL: For the LAST assistant message, thinking blocks MUST remain byte-for-byte
+    // identical to what the API returned. Anthropic rejects any modification.
+    // Pass through unchanged - do NOT sanitize or reconstruct.
+    if (isLastAssistantMessage && (isThinking || hasSignature)) {
       filtered.push(item);
       continue;
     }
@@ -1007,10 +1026,14 @@ export function filterUnsignedThinkingBlocks(
   getCachedSignatureFn?: (sessionId: string, text: string) => string | undefined,
   isClaudeModel?: boolean,
 ): any[] {
-  return contents.map((content: any) => {
+  const lastAssistantIdx = findLastAssistantIndex(contents, "model");
+
+  return contents.map((content: any, idx: number) => {
     if (!content || typeof content !== "object") {
       return content;
     }
+
+    const isLastAssistant = idx === lastAssistantIdx;
 
     if (Array.isArray((content as any).parts)) {
       const filteredParts = filterContentArray(
@@ -1018,6 +1041,7 @@ export function filterUnsignedThinkingBlocks(
         sessionId,
         getCachedSignatureFn,
         isClaudeModel,
+        isLastAssistant,
       );
 
       const trimmedParts = (content as any).role === "model" && !isClaudeModel
@@ -1029,11 +1053,15 @@ export function filterUnsignedThinkingBlocks(
 
     if (Array.isArray((content as any).content)) {
       const isAssistantRole = (content as any).role === "assistant";
+      const isLastAssistantContent = idx === lastAssistantIdx || 
+        (isAssistantRole && idx === findLastAssistantIndex(contents, "assistant"));
+      
       const filteredContent = filterContentArray(
         (content as any).content,
         sessionId,
         getCachedSignatureFn,
         isClaudeModel,
+        isLastAssistantContent,
       );
 
       const trimmedContent = isAssistantRole && !isClaudeModel
@@ -1056,18 +1084,23 @@ export function filterMessagesThinkingBlocks(
   getCachedSignatureFn?: (sessionId: string, text: string) => string | undefined,
   isClaudeModel?: boolean,
 ): any[] {
-  return messages.map((message: any) => {
+  const lastAssistantIdx = findLastAssistantIndex(messages, "assistant");
+
+  return messages.map((message: any, idx: number) => {
     if (!message || typeof message !== "object") {
       return message;
     }
 
     if (Array.isArray((message as any).content)) {
       const isAssistantRole = (message as any).role === "assistant";
+      const isLastAssistant = isAssistantRole && idx === lastAssistantIdx;
+      
       const filteredContent = filterContentArray(
         (message as any).content,
         sessionId,
         getCachedSignatureFn,
         isClaudeModel,
+        isLastAssistant,
       );
 
       const trimmedContent = isAssistantRole && !isClaudeModel

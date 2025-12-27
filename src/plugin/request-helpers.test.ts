@@ -45,6 +45,7 @@ describe("sanitizeThinkingPart (covered via filtering)", () => {
           },
         ],
       },
+      { role: "model", parts: [{ text: "trailing" }] },
     ];
 
     const result = filterUnsignedThinkingBlocks(contents, "session-1", getCachedSignatureFn) as any;
@@ -82,6 +83,7 @@ describe("sanitizeThinkingPart (covered via filtering)", () => {
           },
         ],
       },
+      { role: "model", parts: [{ text: "trailing" }] },
     ];
 
     const result = filterUnsignedThinkingBlocks(contents, "session-1", getCachedSignatureFn) as any;
@@ -107,12 +109,13 @@ describe("sanitizeThinkingPart (covered via filtering)", () => {
               thinking: "restore me",
               cache_control: { type: "ephemeral" },
             },
-            // no signature present (forces restore)
             providerOptions: { injected: true },
           },
           { type: "text", text: "visible" },
         ],
       },
+      { role: "user", content: [{ type: "text", text: "next" }] },
+      { role: "assistant", content: [{ type: "text", text: "last" }] },
     ];
 
     const result = filterMessagesThinkingBlocks(messages, "session-1", getCachedSignatureFn) as any;
@@ -142,6 +145,8 @@ describe("sanitizeThinkingPart (covered via filtering)", () => {
           { type: "text", text: "visible" },
         ],
       },
+      { role: "user", parts: [{ text: "next" }] },
+      { role: "model", parts: [{ text: "last" }] },
     ];
 
     const result = filterUnsignedThinkingBlocks(contents, "session-1", getCachedSignatureFn) as any;
@@ -312,6 +317,8 @@ describe("filterUnsignedThinkingBlocks", () => {
           { type: "text", text: "visible text" },
         ],
       },
+      { role: "user", parts: [{ text: "next" }] },
+      { role: "model", parts: [{ text: "last" }] },
     ];
     const result = filterUnsignedThinkingBlocks(contents);
     expect(result[0].parts).toHaveLength(1);
@@ -348,6 +355,8 @@ describe("filterUnsignedThinkingBlocks", () => {
           { type: "text", text: "visible text" },
         ],
       },
+      { role: "user", parts: [{ text: "next" }] },
+      { role: "model", parts: [{ text: "last" }] },
     ];
     const result = filterUnsignedThinkingBlocks(contents);
     expect(result[0].parts).toHaveLength(1);
@@ -363,6 +372,8 @@ describe("filterUnsignedThinkingBlocks", () => {
           { type: "text", text: "visible text" },
         ],
       },
+      { role: "user", parts: [{ text: "next" }] },
+      { role: "model", parts: [{ text: "last" }] },
     ];
     const result = filterUnsignedThinkingBlocks(contents);
     expect(result[0].parts).toHaveLength(1);
@@ -383,6 +394,8 @@ describe("filterUnsignedThinkingBlocks", () => {
           { thought: true, text: thinkingText, thoughtSignature: validSignature },
         ],
       },
+      { role: "user", parts: [{ text: "next" }] },
+      { role: "model", parts: [{ text: "last" }] },
     ];
     const result = filterUnsignedThinkingBlocks(contents, "session-1", getCachedSignatureFn);
     expect(result[0].parts).toHaveLength(1);
@@ -423,6 +436,8 @@ describe("filterUnsignedThinkingBlocks", () => {
           { type: "text", text: "visible" },
         ],
       },
+      { role: "user", parts: [{ text: "next" }] },
+      { role: "model", parts: [{ text: "last" }] },
     ];
     const result = filterUnsignedThinkingBlocks(contents);
     expect(result[0].parts).toHaveLength(1);
@@ -522,6 +537,7 @@ describe("deepFilterThinkingBlocks", () => {
               { type: "text", text: "visible" },
             ],
           },
+          { role: "assistant", content: [{ type: "text", text: "last" }] },
         ],
       },
     };
@@ -544,6 +560,7 @@ describe("filterMessagesThinkingBlocks", () => {
           { type: "text", text: "visible" },
         ],
       },
+      { role: "assistant", content: [{ type: "text", text: "last" }] },
     ];
 
     const result = filterMessagesThinkingBlocks(messages) as any;
@@ -571,6 +588,7 @@ describe("filterMessagesThinkingBlocks", () => {
           { type: "text", text: "visible" },
         ],
       },
+      { role: "assistant", content: [{ type: "text", text: "last" }] },
     ];
 
     const result = filterMessagesThinkingBlocks(messages, "session-1", getCachedSignatureFn) as any;
@@ -595,6 +613,7 @@ describe("filterMessagesThinkingBlocks", () => {
           { type: "text", text: "visible" },
         ],
       },
+      { role: "assistant", content: [{ type: "text", text: "last" }] },
     ];
 
     const result = filterMessagesThinkingBlocks(messages) as any;
@@ -611,6 +630,7 @@ describe("filterMessagesThinkingBlocks", () => {
           { type: "text", text: "visible" },
         ],
       },
+      { role: "assistant", content: [{ type: "text", text: "last" }] },
     ];
 
     const result = filterMessagesThinkingBlocks(messages) as any;
@@ -634,6 +654,7 @@ describe("filterMessagesThinkingBlocks", () => {
           { type: "text", text: "visible" },
         ],
       },
+      { role: "assistant", content: [{ type: "text", text: "last" }] },
     ];
 
     const result = filterMessagesThinkingBlocks(messages, "session-1", getCachedSignatureFn) as any;
@@ -663,6 +684,7 @@ describe("filterMessagesThinkingBlocks", () => {
           { type: "text", text: "visible" },
         ],
       },
+      { role: "assistant", content: [{ type: "text", text: "last" }] },
     ];
 
     const result = filterMessagesThinkingBlocks(messages, "session-1", getCachedSignatureFn) as any;

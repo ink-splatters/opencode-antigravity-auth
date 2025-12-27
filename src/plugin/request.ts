@@ -10,6 +10,12 @@ import {
 } from "../constants";
 import { cacheSignature, getCachedSignature } from "./cache";
 import {
+  createStreamingTransformer,
+  transformSseLine,
+  transformStreamingPayload,
+} from "./core/streaming";
+import { defaultSignatureStore } from "./stores/signature-store";
+import {
   DEBUG_MESSAGE_PREFIX,
   isDebugEnabled,
   logAntigravityDebugResponse,
@@ -49,30 +55,15 @@ import {
   resolveModelWithTier,
   isClaudeModel,
   isClaudeThinkingModel,
-  configureClaudeToolConfig,
-  appendClaudeThinkingHint,
-  normalizeClaudeTools,
-  normalizeGeminiTools,
   CLAUDE_THINKING_MAX_OUTPUT_TOKENS,
 } from "./transform";
 import { detectErrorType } from "./recovery";
 
 const log = createLogger("request");
 
-/**
- * Stable session ID for the plugin's lifetime.
- * This is used for caching thinking signatures across multi-turn conversations.
- * Generated once at plugin load time and reused for all requests.
- */
 const PLUGIN_SESSION_ID = `-${crypto.randomUUID()}`;
 
-type SignedThinking = {
-  text: string;
-  signature: string;
-};
-
 const MIN_SIGNATURE_LENGTH = 50;
-const lastSignedThinkingBySessionKey = new Map<string, SignedThinking>();
 
 function buildSignatureSessionKey(
   sessionId: string,
@@ -403,7 +394,7 @@ function ensureThinkingBeforeToolUseInContents(contents: any[], signatureSession
       return { ...content, parts: [...thinkingParts, ...otherParts] };
     }
 
-    const lastThinking = lastSignedThinkingBySessionKey.get(signatureSessionKey);
+    const lastThinking = defaultSignatureStore.get(signatureSessionKey);
     if (!lastThinking) {
       return content;
     }
@@ -516,7 +507,7 @@ function ensureThinkingBeforeToolUseInMessages(messages: any[], signatureSession
       return { ...message, content: [...thinkingBlocks, ...otherBlocks] };
     }
 
-    const lastThinking = lastSignedThinkingBySessionKey.get(signatureSessionKey);
+    const lastThinking = defaultSignatureStore.get(signatureSessionKey);
     if (!lastThinking) {
       return message;
     }
@@ -556,190 +547,6 @@ export function isGenerativeLanguageRequest(input: RequestInfo): input is string
   return typeof input === "string" && input.includes("generativelanguage.googleapis.com");
 }
 
-/**
- * Rewrites SSE payloads so downstream consumers see only the inner `response` objects,
- * with thinking/reasoning blocks transformed to OpenCode's expected format.
- */
-function transformStreamingPayload(payload: string): string {
-  return payload
-    .split("\n")
-    .map((line) => {
-      if (!line.startsWith("data:")) {
-        return line;
-      }
-      const json = line.slice(5).trim();
-      if (!json) {
-        return line;
-      }
-      try {
-        const parsed = JSON.parse(json) as { response?: unknown };
-        if (parsed.response !== undefined) {
-          const transformed = transformThinkingParts(parsed.response);
-          return `data: ${JSON.stringify(transformed)}`;
-        }
-      } catch (_) { }
-      return line;
-    })
-    .join("\n");
-}
-
-/**
- * Creates a TransformStream that processes SSE chunks incrementally,
- * transforming each line as it arrives for true real-time streaming support.
- * Optionally caches thinking signatures for Claude multi-turn conversations.
- */
-function createStreamingTransformer(
-  signatureSessionKey?: string,
-  debugText?: string,
-  cacheSignatures = false,
-): TransformStream<Uint8Array, Uint8Array> {
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
-  // Buffer for accumulating thinking text per candidate index (for signature caching)
-  const thoughtBuffer = new Map<number, string>();
-  const debugState = { injected: false };
-
-  return new TransformStream({
-    transform(chunk, controller) {
-      // Decode chunk with stream: true to handle multi-byte characters correctly
-      buffer += decoder.decode(chunk, { stream: true });
-
-      // Process complete lines immediately for real-time streaming
-      const lines = buffer.split("\n");
-      // Keep the last incomplete line in buffer
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        // Transform and forward each line immediately
-        const transformedLine = transformSseLine(
-          line,
-          signatureSessionKey,
-          thoughtBuffer,
-          debugText,
-          debugState,
-          cacheSignatures,
-        );
-        controller.enqueue(encoder.encode(transformedLine + "\n"));
-      }
-    },
-    flush(controller) {
-      // Flush any remaining bytes from TextDecoder
-      buffer += decoder.decode();
-
-      // Process any remaining data in buffer
-      if (buffer) {
-        const transformedLine = transformSseLine(
-          buffer,
-          signatureSessionKey,
-          thoughtBuffer,
-          debugText,
-          debugState,
-          cacheSignatures,
-        );
-        controller.enqueue(encoder.encode(transformedLine));
-      }
-    },
-  });
-}
-
-/**
- * Transforms a single SSE line, extracting and transforming the inner response.
- * Optionally caches thinking signatures for Claude multi-turn support.
- */
-function transformSseLine(
-  line: string,
-  signatureSessionKey?: string,
-  thoughtBuffer?: Map<number, string>,
-  debugText?: string,
-  debugState?: { injected: boolean },
-  cacheSignatures = false,
-): string {
-  if (!line.startsWith("data:")) {
-    return line;
-  }
-  const json = line.slice(5).trim();
-  if (!json) {
-    return line;
-  }
-  try {
-    const parsed = JSON.parse(json) as { response?: unknown };
-    if (parsed.response !== undefined) {
-      if (cacheSignatures && signatureSessionKey && thoughtBuffer) {
-        cacheThinkingSignatures(parsed.response, signatureSessionKey, thoughtBuffer);
-      }
-
-      let response: unknown = parsed.response;
-      if (debugText && debugState && !debugState.injected) {
-        response = injectDebugThinking(response, debugText);
-        debugState.injected = true;
-      }
-
-      const transformed = transformThinkingParts(response);
-      return `data: ${JSON.stringify(transformed)}`;
-    }
-  } catch (_) { }
-  return line;
-}
-
-/**
- * Extracts and caches thinking signatures from a response for Claude multi-turn support.
- */
-function cacheThinkingSignatures(
-  response: unknown,
-  signatureSessionKey: string,
-  thoughtBuffer: Map<number, string>,
-): void {
-  if (!response || typeof response !== "object") return;
-
-  const resp = response as Record<string, unknown>;
-
-  // Handle Gemini-style candidates array (Claude through Antigravity uses this format)
-  if (Array.isArray(resp.candidates)) {
-    resp.candidates.forEach((candidate: any, index: number) => {
-      if (!candidate?.content?.parts) return;
-
-      candidate.content.parts.forEach((part: any) => {
-        // Collect thinking text
-        if (part.thought === true || part.type === "thinking") {
-          const text = part.text || part.thinking || "";
-          if (text) {
-            const current = thoughtBuffer.get(index) ?? "";
-            thoughtBuffer.set(index, current + text);
-          }
-        }
-
-        // Cache signature when we receive it
-        if (part.thoughtSignature) {
-          const fullText = thoughtBuffer.get(index) ?? "";
-          if (fullText) {
-            cacheSignature(signatureSessionKey, fullText, part.thoughtSignature);
-            lastSignedThinkingBySessionKey.set(signatureSessionKey, { text: fullText, signature: part.thoughtSignature });
-          }
-        }
-      });
-    });
-  }
-
-  // Handle Anthropic-style content array
-  if (Array.isArray(resp.content)) {
-    let thinkingText = "";
-    resp.content.forEach((block: any) => {
-      if (block?.type === "thinking") {
-        thinkingText += block.thinking || block.text || "";
-      }
-      if (block?.signature && thinkingText) {
-        cacheSignature(signatureSessionKey, thinkingText, block.signature);
-        lastSignedThinkingBySessionKey.set(signatureSessionKey, { text: thinkingText, signature: block.signature });
-      }
-    });
-  }
-}
-
-/**
- * Rewrites OpenAI-style requests into Antigravity shape, normalizing model, headers,
- * optional cached_content, and thinking config. Also toggles streaming mode for SSE actions.
- */
 /**
  * Options for request preparation.
  */
@@ -896,7 +703,7 @@ export function prepareAntigravityRequest(
             (Array.isArray((req as any).contents) && hasSignedThinkingInContents((req as any).contents)) ||
             (Array.isArray((req as any).messages) && hasSignedThinkingInMessages((req as any).messages)),
           );
-          const hasCachedThinking = lastSignedThinkingBySessionKey.has(signatureSessionKey);
+          const hasCachedThinking = defaultSignatureStore.has(signatureSessionKey);
           needsSignedThinkingWarmup = hasToolUse && !hasSignedThinking && !hasCachedThinking;
         }
 
@@ -1128,7 +935,7 @@ export function prepareAntigravityRequest(
               return cleaned;
             };
 
-            requestPayload.tools.forEach((tool: any, idx: number) => {
+            requestPayload.tools.forEach((tool: any) => {
               const pushDeclaration = (decl: any, source: string) => {
                 const schema =
                   decl?.parameters ||
@@ -1313,7 +1120,7 @@ export function prepareAntigravityRequest(
             const hasSignedThinking =
               (Array.isArray(requestPayload.contents) && hasSignedThinkingInContents(requestPayload.contents)) ||
               (Array.isArray(requestPayload.messages) && hasSignedThinkingInMessages(requestPayload.messages));
-            const hasCachedThinking = lastSignedThinkingBySessionKey.has(signatureSessionKey);
+            const hasCachedThinking = defaultSignatureStore.has(signatureSessionKey);
             needsSignedThinkingWarmup = hasToolUse && !hasSignedThinking && !hasCachedThinking;
           }
         }
@@ -1417,8 +1224,7 @@ export function prepareAntigravityRequest(
 
             requestPayload.contents = closeToolLoopForThinking(requestPayload.contents);
 
-            // Clear the cached thinking for this session since we're starting fresh
-            lastSignedThinkingBySessionKey.delete(signatureSessionKey);
+            defaultSignatureStore.delete(signatureSessionKey);
           }
         }
 
@@ -1597,9 +1403,20 @@ export async function transformAntigravityResponse(
       note: "Streaming SSE response (real-time transform)",
     });
 
-    // Use the optimized line-by-line transformer for immediate forwarding
-    // This ensures thinking/reasoning content streams in real-time
-    return new Response(response.body.pipeThrough(createStreamingTransformer(sessionId, debugText, cacheSignatures)), {
+    const streamingTransformer = createStreamingTransformer(
+      defaultSignatureStore,
+      {
+        onCacheSignature: cacheSignature,
+        onInjectDebug: injectDebugThinking,
+        transformThinkingParts,
+      },
+      {
+        signatureSessionKey: sessionId,
+        debugText,
+        cacheSignatures,
+      },
+    );
+    return new Response(response.body.pipeThrough(streamingTransformer), {
       status: response.status,
       statusText: response.statusText,
       headers,
@@ -1738,3 +1555,29 @@ export async function transformAntigravityResponse(
     return response;
   }
 }
+
+export const __testExports = {
+  buildSignatureSessionKey,
+  hashConversationSeed,
+  extractTextFromContent,
+  extractConversationSeedFromMessages,
+  extractConversationSeedFromContents,
+  resolveConversationKey,
+  resolveProjectKey,
+  isGeminiToolUsePart,
+  isGeminiThinkingPart,
+  ensureThoughtSignature,
+  hasSignedThinkingPart,
+  hasSignedThinkingInContents,
+  hasSignedThinkingInMessages,
+  hasToolUseInContents,
+  hasToolUseInMessages,
+  ensureThinkingBeforeToolUseInContents,
+  ensureThinkingBeforeToolUseInMessages,
+  generateSyntheticProjectId,
+  MIN_SIGNATURE_LENGTH,
+  transformSseLine,
+  transformStreamingPayload,
+  createStreamingTransformer,
+};
+
