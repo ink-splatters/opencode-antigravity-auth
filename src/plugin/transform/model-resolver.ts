@@ -38,6 +38,7 @@ export const MODEL_ALIASES: Record<string, string> = {
   // For Antigravity, these are bypassed and full model name is kept
   "gemini-3-pro-low": "gemini-3-pro",
   "gemini-3-pro-high": "gemini-3-pro",
+  "gemini-3-flash-minimal": "gemini-3-flash",
   "gemini-3-flash-low": "gemini-3-flash",
   "gemini-3-flash-medium": "gemini-3-flash",
   "gemini-3-flash-high": "gemini-3-flash",

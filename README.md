@@ -238,21 +238,11 @@ All Antigravity-routed models now use the `antigravity-` prefix consistently. Th
              "limit": { "context": 1048576, "output": 65535 },
              "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
            },
-           "antigravity-gemini-3-flash-low": {
-             "name": "Gemini 3 Flash Low (Antigravity)",
-             "limit": { "context": 1048576, "output": 65536 },
-             "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
-           },
-           "antigravity-gemini-3-flash-medium": {
-             "name": "Gemini 3 Flash Medium (Antigravity)",
-             "limit": { "context": 1048576, "output": 65536 },
-             "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
-           },
-           "antigravity-gemini-3-flash-high": {
-             "name": "Gemini 3 Flash High (Antigravity)",
-             "limit": { "context": 1048576, "output": 65536 },
-             "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
-           },
+            "antigravity-gemini-3-flash": {
+              "name": "Gemini 3 Flash (Antigravity)",
+              "limit": { "context": 1048576, "output": 65536 },
+              "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
+            },
            "antigravity-claude-sonnet-4-5": {
              "name": "Claude Sonnet 4.5 (Antigravity)",
              "limit": { "context": 200000, "output": 64000 },
@@ -315,9 +305,7 @@ Add these models to your `~/.config/opencode/opencode.json` under `provider.goog
 |----------|-------------|----------|-------|
 | `antigravity-gemini-3-pro-low` | Gemini 3 Pro (low thinking) | thinkingLevel: "low" | Antigravity |
 | `antigravity-gemini-3-pro-high` | Gemini 3 Pro (high thinking) | thinkingLevel: "high" | Antigravity |
-| `antigravity-gemini-3-flash-low` | Gemini 3 Flash (low thinking) | thinkingLevel: "low" | Antigravity |
-| `antigravity-gemini-3-flash-medium` | Gemini 3 Flash (medium thinking) | thinkingLevel: "medium" | Antigravity |
-| `antigravity-gemini-3-flash-high` | Gemini 3 Flash (high thinking) | thinkingLevel: "high" | Antigravity |
+| `antigravity-gemini-3-flash` | Gemini 3 Flash | Default | Antigravity |
 
 ### Claude Models
 
@@ -359,18 +347,8 @@ Add these models to your `~/.config/opencode/opencode.json` under `provider.goog
           "limit": { "context": 1048576, "output": 65535 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
-        "antigravity-gemini-3-flash-low": {
-          "name": "Gemini 3 Flash Low (Antigravity)",
-          "limit": { "context": 1048576, "output": 65536 },
-          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
-        },
-        "antigravity-gemini-3-flash-medium": {
-          "name": "Gemini 3 Flash Medium (Antigravity)",
-          "limit": { "context": 1048576, "output": 65536 },
-          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
-        },
-        "antigravity-gemini-3-flash-high": {
-          "name": "Gemini 3 Flash High (Antigravity)",
+        "antigravity-gemini-3-flash": {
+          "name": "Gemini 3 Flash (Antigravity)",
           "limit": { "context": 1048576, "output": 65536 },
           "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
         },
@@ -463,7 +441,7 @@ This plugin gives you access to **two separate quota pools** for Gemini models, 
 | Model ID | Routed Via | Quota Used |
 |----------|------------|------------|
 | `google/antigravity-gemini-3-pro-high` | This plugin | Antigravity |
-| `google/antigravity-gemini-3-flash-low` | This plugin | Antigravity |
+| `google/antigravity-gemini-3-flash` | This plugin | Antigravity |
 | `google/gemini-2.5-flash` | OpenCode built-in | Gemini CLI |
 | `google/gemini-2.5-pro` | OpenCode built-in | Gemini CLI |
 | `google/antigravity-claude-sonnet-4-5` | This plugin | Antigravity |
