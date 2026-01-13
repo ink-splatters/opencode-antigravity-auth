@@ -450,9 +450,9 @@ export function selectPriorityQueueAccount(
 
 let globalTokenTracker: TokenBucketTracker | null = null;
 
-export function getTokenTracker(config?: Partial<TokenBucketConfig>): TokenBucketTracker {
+export function getTokenTracker(): TokenBucketTracker {
   if (!globalTokenTracker) {
-    globalTokenTracker = new TokenBucketTracker(config);
+    globalTokenTracker = new TokenBucketTracker();
   }
   return globalTokenTracker;
 }
@@ -468,9 +468,9 @@ let globalHealthTracker: HealthScoreTracker | null = null;
  * Get the global health score tracker instance.
  * Creates one with default config if not initialized.
  */
-export function getHealthTracker(config?: Partial<HealthScoreConfig>): HealthScoreTracker {
+export function getHealthTracker(): HealthScoreTracker {
   if (!globalHealthTracker) {
-    globalHealthTracker = new HealthScoreTracker(config);
+    globalHealthTracker = new HealthScoreTracker();
   }
   return globalHealthTracker;
 }
