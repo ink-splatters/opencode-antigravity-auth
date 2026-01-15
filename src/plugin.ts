@@ -520,6 +520,40 @@ const rateLimitStateByAccountQuota = new Map<string, RateLimitState>();
 // Track empty response retry attempts (ported from LLM-API-Key-Proxy)
 const emptyResponseAttempts = new Map<string, number>();
 
+// Track global capacity exhaustion (not per-account, not persisted)
+const CAPACITY_STATE_RESET_MS = 120_000; // Reset after 2 minutes without capacity errors
+const capacityCooldownByKey = new Map<string, number>();
+const capacityFailureStateByKey = new Map<string, { consecutiveFailures: number; lastAt: number }>();
+
+function getCapacityKey(family: ModelFamily, model?: string | null): string {
+  return `${family}:${model ?? "default"}`;
+}
+
+function getCapacityCooldownRemainingMs(family: ModelFamily, model?: string | null): number {
+  const key = getCapacityKey(family, model);
+  const until = capacityCooldownByKey.get(key) ?? 0;
+  return Math.max(0, until - Date.now());
+}
+
+function markCapacityCooldown(family: ModelFamily, model: string | null | undefined, delayMs: number): void {
+  const key = getCapacityKey(family, model);
+  const nextUntil = Date.now() + delayMs;
+  const currentUntil = capacityCooldownByKey.get(key) ?? 0;
+  capacityCooldownByKey.set(key, Math.max(currentUntil, nextUntil));
+}
+
+function getCapacityBackoffForKey(family: ModelFamily, model?: string | null): { delayMs: number; attempt: number } {
+  const key = getCapacityKey(family, model);
+  const now = Date.now();
+  const previous = capacityFailureStateByKey.get(key);
+  const failures = previous && (now - previous.lastAt < CAPACITY_STATE_RESET_MS)
+    ? previous.consecutiveFailures
+    : 0;
+  const delayMs = getCapacityBackoffDelay(failures);
+  capacityFailureStateByKey.set(key, { consecutiveFailures: failures + 1, lastAt: now });
+  return { delayMs, attempt: failures + 1 };
+}
+
 /**
  * Get rate limit backoff with time-window deduplication.
  * 
@@ -878,6 +912,17 @@ export const createAntigravityPlugin = (providerId: string) => async (
               throw new Error("No Antigravity accounts available. Run `opencode auth login`.");
             }
 
+            const capacityWaitMs = getCapacityCooldownRemainingMs(family, model);
+            if (capacityWaitMs > 0) {
+              const waitFormatted = formatWaitTime(capacityWaitMs);
+              pushDebug(`capacity cooldown active family=${family} model=${model ?? ""} waitMs=${capacityWaitMs}`);
+              if (!quietMode) {
+                await showToast(`Server at capacity. Waiting ${waitFormatted}...`, "warning");
+              }
+              await sleep(capacityWaitMs, abortSignal);
+              continue;
+            }
+
             const account = accountManager.getCurrentOrNextForFamily(
               family, 
               model, 
@@ -1212,9 +1257,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   const { attempt, delayMs, isDuplicate } = getRateLimitBackoff(account.index, quotaKey, serverRetryMs);
 
                   const waitTimeFormatted = formatWaitTime(delayMs);
+                  const messageText = typeof bodyInfo.message === "string" ? bodyInfo.message.toLowerCase() : "";
                   const isCapacityExhausted =
                     bodyInfo.reason === "MODEL_CAPACITY_EXHAUSTED" ||
-                    (typeof bodyInfo.message === "string" && bodyInfo.message.toLowerCase().includes("no capacity"));
+                    messageText.includes("no capacity") ||
+                    (messageText.includes("resource has been exhausted") && !bodyInfo.quotaResetTime);
 
                   pushDebug(
                     `429 idx=${account.index} email=${account.email ?? ""} family=${family} delayMs=${delayMs} attempt=${attempt}`,
@@ -1241,17 +1288,18 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   await logResponseBody(debugContext, response, 429);
 
                   if (isCapacityExhausted) {
-                    const failures = account.consecutiveFailures ?? 0;
-                    const capacityBackoffMs = getCapacityBackoffDelay(failures);
-                    account.consecutiveFailures = failures + 1;
-                    
-                    const backoffFormatted = formatWaitTime(capacityBackoffMs);
-                    pushDebug(`capacity exhausted on account ${account.index}, backoff=${capacityBackoffMs}ms (failure #${failures + 1})`);
+                    const { delayMs: capacityBackoffMs, attempt } = getCapacityBackoffForKey(family, model);
+                    markCapacityCooldown(family, model, capacityBackoffMs);
 
-                    await showToast(
-                      `⏳ Server at capacity. Waiting ${backoffFormatted}... (attempt ${failures + 1})`,
-                      "warning",
-                    );
+                    const backoffFormatted = formatWaitTime(capacityBackoffMs);
+                    pushDebug(`capacity exhausted (global) family=${family} model=${model ?? ""} backoff=${capacityBackoffMs}ms (attempt ${attempt})`);
+
+                    if (!quietMode) {
+                      await showToast(
+                        `⏳ Server at capacity. Waiting ${backoffFormatted}... (attempt ${attempt})`,
+                        "warning",
+                      );
+                    }
                     await sleep(capacityBackoffMs, abortSignal);
                     continue;
                   }
