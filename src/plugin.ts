@@ -1198,11 +1198,6 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   },
                 );
 
-                // Show thinking recovery toast (respects quiet mode)
-                if (!quietMode && prepared.thinkingRecoveryMessage) {
-                  await showToast(prepared.thinkingRecoveryMessage, "warning");
-                }
-
                 const originalUrl = toUrlString(input);
                 const resolvedUrl = toUrlString(prepared.request);
                 pushDebug(`endpoint=${currentEndpoint}`);
@@ -1285,6 +1280,15 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     const failures = account.consecutiveFailures ?? 0;
                     pushDebug(`capacity exhausted on account ${account.index}, backoff=${capacityBackoffMs}ms (failure #${failures})`);
 
+                    // Check if we can switch to another account (respects switch_on_first_rate_limit config)
+                    if (config.switch_on_first_rate_limit && accountCount > 1) {
+                      await showToast(`Server at capacity. Switching account in 1s...`, "warning");
+                      await sleep(FIRST_RETRY_DELAY_MS, abortSignal);
+                      shouldSwitchAccount = true;
+                      break;
+                    }
+
+                    // No other accounts available or config disabled - wait the backoff
                     await showToast(
                       `Server at capacity. Waiting ${backoffFormatted}... (attempt ${failures})`,
                       "warning",
