@@ -38,7 +38,7 @@ jobs:
         )
       )
     timeout-minutes: 30
-    runs-on: 'ubuntu-latest'
+    runs-on: self-hosted
 
     steps:
       - name: 'Check if already triaged'
@@ -196,119 +196,20 @@ jobs:
           {"type_label": "bug", "area_label": "area/auth", "duplicate_of": null, "suggested_response": "I investigated the code and found that..."}
           EOF
 
-      - name: 'Triage with Jules API'
-        id: 'jules_triage'
+      - name: 'Run Opencode Triage'
+        id: 'opencode_triage'
         if: steps.check_labels.outputs.skip != 'true'
-        continue-on-error: true
-        env:
-          JULES_API_KEY: '${{ secrets.JULES_API_KEY }}'
         run: |
           PROMPT=$(cat triage_prompt.txt)
-          ESCAPED_PROMPT=$(echo "$PROMPT" | jq -Rs .)
+          echo "Running Opencode Triage on Pi..."
           
-          RESPONSE=$(curl -s 'https://jules.googleapis.com/v1alpha/sessions' \
-            -X POST \
-            -H "Content-Type: application/json" \
-            -H "x-goog-api-key: $JULES_API_KEY" \
-            -d "{
-              \"prompt\": $ESCAPED_PROMPT,
-              \"sourceContext\": {
-                \"source\": \"sources/github/${{ github.repository }}\",
-                \"githubRepoContext\": {
-                  \"startingBranch\": \"main\"
-                }
-              },
-              \"requirePlanApproval\": false
-            }")
+          # Run CLI with persistent auth
+          OUTPUT=$(opencode run "$PROMPT" --model="google/antigravity-gemini-3-pro" --variant=high --quiet)
           
-          echo "Jules response: $RESPONSE"
-          
-          SESSION_NAME=$(echo "$RESPONSE" | jq -r '.name // empty')
-          SESSION_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
-          if [ -z "$SESSION_ID" ]; then
-            ERROR=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
-            echo "Jules API Error: $ERROR"
-            echo "jules_success=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          echo "Session created: $SESSION_ID (name: $SESSION_NAME)"
-          echo "session_id=$SESSION_ID" >> $GITHUB_OUTPUT
-          
-          echo "Waiting for Jules to complete (max 25 minutes)..."
-          for i in {1..150}; do
-            sleep 10
-            STATUS=$(curl -s "https://jules.googleapis.com/v1alpha/$SESSION_NAME" \
-              -H "x-goog-api-key: $JULES_API_KEY")
-            
-            STATE=$(echo "$STATUS" | jq -r '.state // empty')
-            echo "Attempt $i: State = $STATE"
-            
-            if [ "$STATE" = "COMPLETED" ] || [ "$STATE" = "FAILED" ] || [ "$STATE" = "CANCELLED" ]; then
-              echo "Jules finished with state: $STATE"
-              
-              if [ "$STATE" = "COMPLETED" ]; then
-                ACTIVITIES=$(curl -s "https://jules.googleapis.com/v1alpha/$SESSION_NAME/activities" \
-                  -H "x-goog-api-key: $JULES_API_KEY")
-                
-                echo "Activities response:"
-                echo "$ACTIVITIES" | jq '.'
-                
-                OUTPUT=$(echo "$ACTIVITIES" | jq -r '[.activities[] | select(.agentMessaged != null) | .agentMessaged.agentMessage] | last // empty')
-                
-                if [ -n "$OUTPUT" ]; then
-                  echo "Extracted agent message: $OUTPUT"
-                  echo "result<<EOF" >> $GITHUB_OUTPUT
-                  echo "$OUTPUT" >> $GITHUB_OUTPUT
-                  echo "EOF" >> $GITHUB_OUTPUT
-                  echo "jules_success=true" >> $GITHUB_OUTPUT
-                  exit 0
-                else
-                  echo "No agentMessaged found in activities"
-                fi
-              fi
-              
-              echo "jules_success=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          done
-          
-          echo "Jules timed out"
-          echo "jules_success=false" >> $GITHUB_OUTPUT
-
-      - name: 'Fallback to Gemini 3 Flash'
-        id: 'gemini_fallback'
-        if: steps.check_labels.outputs.skip != 'true' && steps.jules_triage.outputs.jules_success != 'true'
-        env:
-          GEMINI_API_KEY: '${{ secrets.GEMINI_API_KEY }}'
-        run: |
-          PROMPT=$(cat triage_prompt.txt)
-          ESCAPED_PROMPT=$(echo "$PROMPT" | jq -Rs .)
-          
-          RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=$GEMINI_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"contents\": [{
-                \"parts\": [{\"text\": $ESCAPED_PROMPT}]
-              }],
-              \"generationConfig\": {
-                \"temperature\": 0.1,
-                \"maxOutputTokens\": 8192,
-                \"responseMimeType\": \"application/json\"
-              }
-            }")
-          
-          echo "Gemini response: $RESPONSE"
-          
-          TEXT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
-          if [ -z "$TEXT" ]; then
-            ERROR=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
-            echo "Gemini API Error: $ERROR"
-            exit 1
-          fi
+          echo "Opencode Output: $OUTPUT"
           
           echo "result<<EOF" >> $GITHUB_OUTPUT
-          echo "$TEXT" >> $GITHUB_OUTPUT
+          echo "$OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: 'Apply Labels and Respond'
@@ -316,11 +217,10 @@ jobs:
         uses: 'actions/github-script@v7'
         env:
           ISSUE_NUMBER: '${{ steps.get_issue.outputs.number }}'
-          JULES_OUTPUT: '${{ steps.jules_triage.outputs.result }}'
-          GEMINI_OUTPUT: '${{ steps.gemini_fallback.outputs.result }}'
+          OPENCODE_OUTPUT: '${{ steps.opencode_triage.outputs.result }}'
         with:
           script: |
-            const rawOutput = process.env.JULES_OUTPUT || process.env.GEMINI_OUTPUT;
+            const rawOutput = process.env.OPENCODE_OUTPUT;
             if (!rawOutput) {
               core.warning('No triage output available');
               return;
