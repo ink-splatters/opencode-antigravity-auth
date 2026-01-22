@@ -1382,8 +1382,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
                        i -= 1;
                        continue; 
                      } else {
-                       pushDebug(`Max capacity retries (3) exhausted for endpoint ${currentEndpoint}, trying next endpoint...`);
-                       // Do not decrement i, loop will advance to next endpoint
+                       pushDebug(`Max capacity retries (3) exhausted for endpoint ${currentEndpoint}, regenerating fingerprint...`);
+                       // Regenerate fingerprint to get fresh device identity before trying next endpoint
+                       const newFingerprint = accountManager.regenerateAccountFingerprint(account.index);
+                       if (newFingerprint) {
+                         pushDebug(`Fingerprint regenerated for account ${account.index}`);
+                       }
+                       capacityRetryCount = 0; // Reset for next endpoint
                        continue;
                      }
                   }
