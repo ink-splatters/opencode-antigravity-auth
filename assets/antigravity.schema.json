@@ -19,11 +19,6 @@
       "type": "string",
       "description": "Custom directory for debug logs. Env: OPENCODE_ANTIGRAVITY_LOG_DIR=/path/to/logs"
     },
-    "keep_thinking": {
-      "default": false,
-      "type": "boolean",
-      "description": "Preserve thinking blocks for Claude models using signature caching. May cause signature errors. Env: OPENCODE_ANTIGRAVITY_KEEP_THINKING=1"
-    },
     "session_recovery": {
       "default": true,
       "type": "boolean",
@@ -76,7 +71,7 @@
         "write_interval_seconds"
       ],
       "additionalProperties": false,
-      "description": "Signature cache configuration for persisting thinking block signatures. Only used when keep_thinking is enabled."
+      "description": "Signature cache configuration for persisting thinking block signatures."
     },
     "empty_response_max_attempts": {
       "default": 4,
@@ -139,11 +134,7 @@
     "account_selection_strategy": {
       "default": "hybrid",
       "type": "string",
-      "enum": [
-        "sticky",
-        "round-robin",
-        "hybrid"
-      ]
+      "enum": ["sticky", "round-robin", "hybrid"]
     },
     "pid_offset_enabled": {
       "default": false,

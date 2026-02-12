@@ -2,7 +2,7 @@
  * Cross-Model Metadata Sanitization
  *
  * Fixes: "Invalid `signature` in `thinking` block" error when switching models mid-session.
- * 
+ *
  * Root cause: Gemini stores thoughtSignature in metadata.google, Claude stores signature
  * in top-level thinking blocks. Foreign signatures fail validation on the target model.
  */
@@ -24,7 +24,10 @@ export interface SanitizationResult {
   signaturesStripped: number;
 }
 
-const GEMINI_SIGNATURE_FIELDS = ["thoughtSignature", "thinkingMetadata"] as const;
+const GEMINI_SIGNATURE_FIELDS = [
+  "thoughtSignature",
+  "thinkingMetadata",
+] as const;
 const CLAUDE_SIGNATURE_FIELDS = ["signature"] as const;
 
 export function getModelFamily(model: string): ModelFamily {
@@ -39,7 +42,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 export function stripGeminiThinkingMetadata(
   part: Record<string, unknown>,
-  preserveNonSignature = true
+  preserveNonSignature = true,
 ): { part: Record<string, unknown>; stripped: number } {
   let stripped = 0;
 
@@ -78,9 +81,10 @@ export function stripGeminiThinkingMetadata(
   return { part, stripped };
 }
 
-export function stripClaudeThinkingFields(
-  part: Record<string, unknown>
-): { part: Record<string, unknown>; stripped: number } {
+export function stripClaudeThinkingFields(part: Record<string, unknown>): {
+  part: Record<string, unknown>;
+  stripped: number;
+} {
   let stripped = 0;
 
   if (part.type === "thinking" || part.type === "redacted_thinking") {
@@ -105,7 +109,7 @@ export function stripClaudeThinkingFields(
 function sanitizePart(
   part: unknown,
   targetFamily: ModelFamily,
-  preserveNonSignature: boolean
+  preserveNonSignature: boolean,
 ): { part: unknown; stripped: number } {
   if (!isPlainObject(part)) {
     return { part, stripped: 0 };
@@ -114,10 +118,7 @@ function sanitizePart(
   let totalStripped = 0;
   const partObj = { ...part } as Record<string, unknown>;
 
-  if (targetFamily === "claude") {
-    const result = stripGeminiThinkingMetadata(partObj, preserveNonSignature);
-    totalStripped += result.stripped;
-  } else if (targetFamily === "gemini") {
+  if (targetFamily === "gemini") {
     const result = stripClaudeThinkingFields(partObj);
     totalStripped += result.stripped;
   }
@@ -128,7 +129,7 @@ function sanitizePart(
 function sanitizeParts(
   parts: unknown[],
   targetFamily: ModelFamily,
-  preserveNonSignature: boolean
+  preserveNonSignature: boolean,
 ): { parts: unknown[]; stripped: number } {
   let totalStripped = 0;
 
@@ -144,7 +145,7 @@ function sanitizeParts(
 function sanitizeContents(
   contents: unknown[],
   targetFamily: ModelFamily,
-  preserveNonSignature: boolean
+  preserveNonSignature: boolean,
 ): { contents: unknown[]; stripped: number } {
   let totalStripped = 0;
 
@@ -157,7 +158,7 @@ function sanitizeContents(
       const result = sanitizeParts(
         contentObj.parts,
         targetFamily,
-        preserveNonSignature
+        preserveNonSignature,
       );
       contentObj.parts = result.parts;
       totalStripped += result.stripped;
@@ -172,7 +173,7 @@ function sanitizeContents(
 function sanitizeMessages(
   messages: unknown[],
   targetFamily: ModelFamily,
-  preserveNonSignature: boolean
+  preserveNonSignature: boolean,
 ): { messages: unknown[]; stripped: number } {
   let totalStripped = 0;
 
@@ -185,7 +186,7 @@ function sanitizeMessages(
       const result = sanitizeParts(
         messageObj.content,
         targetFamily,
-        preserveNonSignature
+        preserveNonSignature,
       );
       messageObj.content = result.parts;
       totalStripped += result.stripped;
@@ -200,7 +201,7 @@ function sanitizeMessages(
 export function deepSanitizeCrossModelMetadata(
   obj: unknown,
   targetFamily: ModelFamily,
-  preserveNonSignature = true
+  preserveNonSignature = true,
 ): { obj: unknown; stripped: number } {
   if (!isPlainObject(obj)) {
     return { obj, stripped: 0 };
@@ -213,7 +214,7 @@ export function deepSanitizeCrossModelMetadata(
     const sanitized = sanitizeContents(
       result.contents,
       targetFamily,
-      preserveNonSignature
+      preserveNonSignature,
     );
     result.contents = sanitized.contents;
     totalStripped += sanitized.stripped;
@@ -223,7 +224,7 @@ export function deepSanitizeCrossModelMetadata(
     const sanitized = sanitizeMessages(
       result.messages,
       targetFamily,
-      preserveNonSignature
+      preserveNonSignature,
     );
     result.messages = sanitized.messages;
     totalStripped += sanitized.stripped;
@@ -235,7 +236,7 @@ export function deepSanitizeCrossModelMetadata(
       const sanitized = sanitizeMessages(
         extraBody.messages,
         targetFamily,
-        preserveNonSignature
+        preserveNonSignature,
       );
       extraBody.messages = sanitized.messages;
       totalStripped += sanitized.stripped;
@@ -248,7 +249,7 @@ export function deepSanitizeCrossModelMetadata(
       const sanitized = deepSanitizeCrossModelMetadata(
         req,
         targetFamily,
-        preserveNonSignature
+        preserveNonSignature,
       );
       totalStripped += sanitized.stripped;
       return sanitized.obj;
@@ -261,7 +262,7 @@ export function deepSanitizeCrossModelMetadata(
 
 export function sanitizeCrossModelPayload(
   payload: unknown,
-  options: SanitizerOptions
+  options: SanitizerOptions,
 ): SanitizationResult {
   const targetFamily = getModelFamily(options.targetModel);
 
@@ -277,7 +278,7 @@ export function sanitizeCrossModelPayload(
   const result = deepSanitizeCrossModelMetadata(
     payload,
     targetFamily,
-    preserveNonSignature
+    preserveNonSignature,
   );
 
   return {
@@ -289,7 +290,7 @@ export function sanitizeCrossModelPayload(
 
 export function sanitizeCrossModelPayloadInPlace(
   payload: Record<string, unknown>,
-  options: SanitizerOptions
+  options: SanitizerOptions,
 ): number {
   const targetFamily = getModelFamily(options.targetModel);
 
@@ -304,15 +305,9 @@ export function sanitizeCrossModelPayloadInPlace(
     for (const part of parts) {
       if (!isPlainObject(part)) continue;
 
-      if (targetFamily === "claude") {
-        const result = stripGeminiThinkingMetadata(
-          part as Record<string, unknown>,
-          preserveNonSignature
-        );
-        totalStripped += result.stripped;
-      } else if (targetFamily === "gemini") {
+      if (targetFamily === "gemini") {
         const result = stripClaudeThinkingFields(
-          part as Record<string, unknown>
+          part as Record<string, unknown>,
         );
         totalStripped += result.stripped;
       }

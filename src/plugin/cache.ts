@@ -94,9 +94,10 @@ let diskCache: SignatureCache | null = null;
 
 /**
  * Initialize the disk-based signature cache.
- * Call this from plugin initialization when keep_thinking is enabled.
  */
-export function initDiskSignatureCache(config: SignatureCacheConfig | undefined): SignatureCache | null {
+export function initDiskSignatureCache(
+  config: SignatureCacheConfig | undefined,
+): SignatureCache | null {
   diskCache = createSignatureCache(config);
   return diskCache;
 }
@@ -114,7 +115,10 @@ export function getDiskSignatureCache(): SignatureCache | null {
  * Uses SHA-256 over UTF-8 bytes and truncates to keep memory usage bounded.
  */
 function hashText(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex").slice(0, SIGNATURE_TEXT_HASH_HEX_LEN);
+  return createHash("sha256")
+    .update(text, "utf8")
+    .digest("hex")
+    .slice(0, SIGNATURE_TEXT_HASH_HEX_LEN);
 }
 
 /**
@@ -129,7 +133,11 @@ function makeDiskKey(sessionId: string, textHash: string): string {
  * Used for Claude models that require signed thinking blocks in multi-turn conversations.
  * Also writes to disk cache if enabled.
  */
-export function cacheSignature(sessionId: string, text: string, signature: string): void {
+export function cacheSignature(
+  sessionId: string,
+  text: string,
+  signature: string,
+): void {
   if (!sessionId || !text || !signature) return;
 
   const textHash = hashText(text);
@@ -151,9 +159,13 @@ export function cacheSignature(sessionId: string, text: string, signature: strin
     }
     // If still at capacity, remove oldest entries
     if (sessionMemCache.size >= MAX_ENTRIES_PER_SESSION) {
-      const entries = Array.from(sessionMemCache.entries())
-        .sort((a, b) => a[1].timestamp - b[1].timestamp);
-      const toRemove = entries.slice(0, Math.floor(MAX_ENTRIES_PER_SESSION / 4));
+      const entries = Array.from(sessionMemCache.entries()).sort(
+        (a, b) => a[1].timestamp - b[1].timestamp,
+      );
+      const toRemove = entries.slice(
+        0,
+        Math.floor(MAX_ENTRIES_PER_SESSION / 4),
+      );
       for (const [key] of toRemove) {
         sessionMemCache.delete(key);
       }
@@ -174,7 +186,10 @@ export function cacheSignature(sessionId: string, text: string, signature: strin
  * Checks memory first, then falls back to disk cache.
  * Returns undefined if not found or expired.
  */
-export function getCachedSignature(sessionId: string, text: string): string | undefined {
+export function getCachedSignature(
+  sessionId: string,
+  text: string,
+): string | undefined {
   if (!sessionId || !text) return undefined;
 
   const textHash = hashText(text);

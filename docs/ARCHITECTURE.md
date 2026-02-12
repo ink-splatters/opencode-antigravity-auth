@@ -66,24 +66,24 @@ fetch() intercepted → isGenerativeLanguageRequest() → prepareAntigravityRequ
 
 ### 2. Request Transformation (`request.ts`)
 
-| Step | What Happens |
-|------|--------------|
-| Model detection | Detect Claude/Gemini from URL |
-| Thinking config | Add `thinkingConfig` for thinking models |
-| Thinking strip | Remove ALL thinking blocks (Claude) |
-| Tool normalization | Convert to `functionDeclarations[]` |
-| Schema cleaning | Remove unsupported JSON Schema fields |
-| ID assignment | Assign IDs to tool calls (FIFO matching) |
-| Wrap request | `{ project, model, request: {...} }` |
+| Step               | What Happens                             |
+| ------------------ | ---------------------------------------- |
+| Model detection    | Detect Claude/Gemini from URL            |
+| Thinking config    | Add `thinkingConfig` for thinking models |
+| Thinking strip     | Remove ALL thinking blocks (Claude)      |
+| Tool normalization | Convert to `functionDeclarations[]`      |
+| Schema cleaning    | Remove unsupported JSON Schema fields    |
+| ID assignment      | Assign IDs to tool calls (FIFO matching) |
+| Wrap request       | `{ project, model, request: {...} }`     |
 
 ### 3. Response Transformation (`request.ts`)
 
-| Step | What Happens |
-|------|--------------|
-| SSE streaming | Real-time line-by-line TransformStream |
-| Signature caching | Cache `thoughtSignature` for display |
-| Format transform | `thought: true` → `type: "reasoning"` |
-| Envelope unwrap | Extract inner `response` object |
+| Step              | What Happens                           |
+| ----------------- | -------------------------------------- |
+| SSE streaming     | Real-time line-by-line TransformStream |
+| Signature caching | Cache `thoughtSignature` for display   |
+| Format transform  | `thought: true` → `type: "reasoning"`  |
+| Envelope unwrap   | Extract inner `response` object        |
 
 ---
 
@@ -92,6 +92,7 @@ fetch() intercepted → isGenerativeLanguageRequest() → prepareAntigravityRequ
 ### Why Special Handling?
 
 Claude through Antigravity requires:
+
 1. **Gemini format** - `contents[].parts[]` not `messages[].content[]`
 2. **Thinking signatures** - Multi-turn needs signed blocks or errors
 3. **Schema restrictions** - Rejects `const`, `$ref`, `$defs`, etc.
@@ -112,6 +113,7 @@ Claude API:      Generates fresh thinking
 ```
 
 **Why this works:**
+
 - Zero signature errors (impossible to have invalid signatures)
 - Same quality (Claude sees full conversation, re-thinks fresh)
 - Simpler code (no complex validation/restoration)
@@ -125,6 +127,7 @@ Claude API requires thinking before `tool_use` blocks. The plugin:
 3. Only injects for the **first** assistant message of a turn (not every message)
 
 **Turn boundary detection** (`thinking-recovery.ts`):
+
 ```typescript
 // A "turn" starts after a real user message (not tool_result)
 // Only inject thinking into first assistant message after that
@@ -177,6 +180,7 @@ Claude rejects unsupported JSON Schema features. The plugin uses an **allowlist 
 **Removed:** `const`, `$ref`, `$defs`, `default`, `examples`, `additionalProperties`, `$schema`, `title`
 
 **Transformations:**
+
 - `const: "value"` → `enum: ["value"]`
 - Empty object schema → Add placeholder `reason` property
 
@@ -203,8 +207,8 @@ Contains OAuth refresh tokens - treat as sensitive.
 
 ### Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
+| Variable                     | Purpose                      |
+| ---------------------------- | ---------------------------- |
 | `OPENCODE_ANTIGRAVITY_DEBUG` | `1` or `2` for debug logging |
 | `OPENCODE_ANTIGRAVITY_QUIET` | Suppress toast notifications |
 
@@ -216,8 +220,7 @@ Location: `~/.config/opencode/antigravity.json`
 {
   "session_recovery": true,
   "auto_resume": true,
-  "resume_text": "continue",
-  "keep_thinking": false
+  "resume_text": "continue"
 }
 ```
 
@@ -227,35 +230,35 @@ Location: `~/.config/opencode/antigravity.json`
 
 ### `request.ts`
 
-| Function | Purpose |
-|----------|---------|
-| `prepareAntigravityRequest()` | Main request transformation |
-| `transformAntigravityResponse()` | SSE streaming, format conversion |
-| `ensureThinkingBeforeToolUseInContents()` | Inject cached thinking |
-| `createStreamingTransformer()` | Real-time SSE processing |
+| Function                                  | Purpose                          |
+| ----------------------------------------- | -------------------------------- |
+| `prepareAntigravityRequest()`             | Main request transformation      |
+| `transformAntigravityResponse()`          | SSE streaming, format conversion |
+| `ensureThinkingBeforeToolUseInContents()` | Inject cached thinking           |
+| `createStreamingTransformer()`            | Real-time SSE processing         |
 
 ### `request-helpers.ts`
 
-| Function | Purpose |
-|----------|---------|
-| `deepFilterThinkingBlocks()` | Recursive thinking block removal |
-| `cleanJSONSchemaForAntigravity()` | Schema sanitization |
-| `transformThinkingParts()` | `thought` → `reasoning` format |
+| Function                          | Purpose                          |
+| --------------------------------- | -------------------------------- |
+| `deepFilterThinkingBlocks()`      | Recursive thinking block removal |
+| `cleanJSONSchemaForAntigravity()` | Schema sanitization              |
+| `transformThinkingParts()`        | `thought` → `reasoning` format   |
 
 ### `thinking-recovery.ts`
 
-| Function | Purpose |
-|----------|---------|
+| Function                     | Purpose                            |
+| ---------------------------- | ---------------------------------- |
 | `analyzeConversationState()` | Detect turn boundaries, tool loops |
-| `needsThinkingRecovery()` | Check if recovery needed |
-| `closeToolLoopForThinking()` | Inject synthetic messages |
+| `needsThinkingRecovery()`    | Check if recovery needed           |
+| `closeToolLoopForThinking()` | Inject synthetic messages          |
 
 ### `recovery.ts`
 
-| Function | Purpose |
-|----------|---------|
-| `handleSessionRecovery()` | Main recovery orchestration |
-| `createSessionRecoveryHook()` | Hook factory for plugin |
+| Function                      | Purpose                     |
+| ----------------------------- | --------------------------- |
+| `handleSessionRecovery()`     | Main recovery orchestration |
+| `createSessionRecoveryHook()` | Hook factory for plugin     |
 
 ---
 
@@ -282,13 +285,13 @@ export OPENCODE_ANTIGRAVITY_DEBUG=2  # Verbose
 
 ## Troubleshooting
 
-| Error | Cause | Solution |
-|-------|-------|----------|
-| `invalid signature` | Corrupted thinking block | Update plugin (strips all thinking) |
-| `Unknown field: const` | Schema uses `const` | Plugin auto-converts to `enum` |
-| `tool_use without tool_result` | Interrupted execution | Session recovery injects results |
-| `Expected thinking but found text` | Turn started without thinking | Thinking recovery closes turn |
-| `429 Too Many Requests` | Rate limited | Plugin auto-rotates accounts |
+| Error                              | Cause                         | Solution                            |
+| ---------------------------------- | ----------------------------- | ----------------------------------- |
+| `invalid signature`                | Corrupted thinking block      | Update plugin (strips all thinking) |
+| `Unknown field: const`             | Schema uses `const`           | Plugin auto-converts to `enum`      |
+| `tool_use without tool_result`     | Interrupted execution         | Session recovery injects results    |
+| `Expected thinking but found text` | Turn started without thinking | Thinking recovery closes turn       |
+| `429 Too Many Requests`            | Rate limited                  | Plugin auto-rotates accounts        |
 
 ---
 

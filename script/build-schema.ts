@@ -9,7 +9,7 @@ const outputPath = join(__dirname, "../assets/antigravity.schema.json");
 // Use zod v4's built-in toJSONSchema method
 const rawSchema = AntigravityConfigSchema.toJSONSchema({
   unrepresentable: "any",
-  override: (_ctx) => undefined // Use default handling
+  override: (_ctx) => undefined, // Use default handling
 }) as Record<string, unknown>;
 
 // Remove the "required" array since all fields have defaults and are optional
@@ -23,8 +23,6 @@ const envVarDescriptions: Record<string, string> = {
     "Enable debug logging to file. Env: OPENCODE_ANTIGRAVITY_DEBUG=1 (or =2 for verbose)",
   log_dir:
     "Custom directory for debug logs. Env: OPENCODE_ANTIGRAVITY_LOG_DIR=/path/to/logs",
-  keep_thinking:
-    "Preserve thinking blocks for Claude models using signature caching. May cause signature errors. Env: OPENCODE_ANTIGRAVITY_KEEP_THINKING=1",
   session_recovery:
     "Enable automatic session recovery from tool_result_missing errors. Env: OPENCODE_ANTIGRAVITY_SESSION_RECOVERY=1",
   auto_resume:
@@ -45,7 +43,8 @@ const envVarDescriptions: Record<string, string> = {
     "Seconds before token expiry to trigger proactive refresh.",
   proactive_refresh_check_interval_seconds:
     "Interval between proactive refresh checks in seconds.",
-  auto_update: "Enable automatic plugin updates. Env: OPENCODE_ANTIGRAVITY_AUTO_UPDATE=1",
+  auto_update:
+    "Enable automatic plugin updates. Env: OPENCODE_ANTIGRAVITY_AUTO_UPDATE=1",
 };
 
 const signatureCacheDescriptions: Record<string, string> = {
@@ -56,7 +55,9 @@ const signatureCacheDescriptions: Record<string, string> = {
 };
 
 function addDescriptions(schema: Record<string, unknown>): void {
-  const props = schema.properties as Record<string, Record<string, unknown>> | undefined;
+  const props = schema.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined;
   if (!props) return;
 
   for (const [key, prop] of Object.entries(props)) {
@@ -65,18 +66,24 @@ function addDescriptions(schema: Record<string, unknown>): void {
     }
 
     if (key === "signature_cache" && prop.properties) {
-      const cacheProps = prop.properties as Record<string, Record<string, unknown>>;
+      const cacheProps = prop.properties as Record<
+        string,
+        Record<string, unknown>
+      >;
       for (const [cacheKey, cacheProp] of Object.entries(cacheProps)) {
         if (signatureCacheDescriptions[cacheKey]) {
           cacheProp.description = signatureCacheDescriptions[cacheKey];
         }
       }
-      prop.description = "Signature cache configuration for persisting thinking block signatures. Only used when keep_thinking is enabled.";
+      prop.description =
+        "Signature cache configuration for persisting thinking block signatures.";
     }
   }
 }
 
-const definitions = rawSchema.definitions as Record<string, Record<string, unknown>> | undefined;
+const definitions = rawSchema.definitions as
+  | Record<string, Record<string, unknown>>
+  | undefined;
 if (definitions?.AntigravityConfig) {
   addDescriptions(definitions.AntigravityConfig);
 } else {

@@ -1,6 +1,6 @@
 /**
  * Configuration loader for opencode-antigravity-auth plugin.
- * 
+ *
  * Loads config from files with environment variable overrides.
  * Priority (lowest to highest):
  * 1. Schema defaults
@@ -12,7 +12,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { AccountSelectionStrategySchema, AntigravityConfigSchema, DEFAULT_CONFIG, type AntigravityConfig } from "./schema";
+import {
+  AccountSelectionStrategySchema,
+  AntigravityConfigSchema,
+  DEFAULT_CONFIG,
+  type AntigravityConfig,
+} from "./schema";
 import { createLogger } from "../logger";
 
 const log = createLogger("config");
@@ -73,7 +78,9 @@ function loadConfigFile(path: string): Partial<AntigravityConfig> | null {
     if (!result.success) {
       log.warn("Config validation error", {
         path,
-        issues: result.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join(", "),
+        issues: result.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join(", "),
       });
       return null;
     }
@@ -94,7 +101,7 @@ function loadConfigFile(path: string): Partial<AntigravityConfig> | null {
  */
 function mergeConfigs(
   base: AntigravityConfig,
-  override: Partial<AntigravityConfig>
+  override: Partial<AntigravityConfig>,
 ): AntigravityConfig {
   return {
     ...base,
@@ -120,13 +127,16 @@ function applyEnvOverrides(config: AntigravityConfig): AntigravityConfig {
     ...config,
 
     // OPENCODE_ANTIGRAVITY_QUIET=1
-    quiet_mode: env.OPENCODE_ANTIGRAVITY_QUIET === "1" || env.OPENCODE_ANTIGRAVITY_QUIET === "true"
-      ? true
-      : config.quiet_mode,
+    quiet_mode:
+      env.OPENCODE_ANTIGRAVITY_QUIET === "1" ||
+      env.OPENCODE_ANTIGRAVITY_QUIET === "true"
+        ? true
+        : config.quiet_mode,
 
     // OPENCODE_ANTIGRAVITY_DEBUG=1 or any truthy value
     debug: env.OPENCODE_ANTIGRAVITY_DEBUG
-      ? env.OPENCODE_ANTIGRAVITY_DEBUG !== "0" && env.OPENCODE_ANTIGRAVITY_DEBUG !== "false"
+      ? env.OPENCODE_ANTIGRAVITY_DEBUG !== "0" &&
+        env.OPENCODE_ANTIGRAVITY_DEBUG !== "false"
       : config.debug,
 
     // OPENCODE_ANTIGRAVITY_LOG_DIR=/path/to/logs
@@ -145,7 +155,7 @@ function applyEnvOverrides(config: AntigravityConfig): AntigravityConfig {
       env.OPENCODE_ANTIGRAVITY_AUTO_RESUME === "false"
         ? false
         : env.OPENCODE_ANTIGRAVITY_AUTO_RESUME === "1" ||
-          env.OPENCODE_ANTIGRAVITY_AUTO_RESUME === "true"
+            env.OPENCODE_ANTIGRAVITY_AUTO_RESUME === "true"
           ? true
           : config.auto_resume,
 
@@ -160,9 +170,12 @@ function applyEnvOverrides(config: AntigravityConfig): AntigravityConfig {
         : config.auto_update,
 
     // OPENCODE_ANTIGRAVITY_ACCOUNT_SELECTION_STRATEGY=sticky|round-robin|hybrid
-    account_selection_strategy: env.OPENCODE_ANTIGRAVITY_ACCOUNT_SELECTION_STRATEGY
-      ? AccountSelectionStrategySchema.catch('sticky').parse(env.OPENCODE_ANTIGRAVITY_ACCOUNT_SELECTION_STRATEGY)
-      : config.account_selection_strategy,
+    account_selection_strategy:
+      env.OPENCODE_ANTIGRAVITY_ACCOUNT_SELECTION_STRATEGY
+        ? AccountSelectionStrategySchema.catch("sticky").parse(
+            env.OPENCODE_ANTIGRAVITY_ACCOUNT_SELECTION_STRATEGY,
+          )
+        : config.account_selection_strategy,
 
     // OPENCODE_ANTIGRAVITY_PID_OFFSET_ENABLED=1
     pid_offset_enabled:
@@ -170,7 +183,6 @@ function applyEnvOverrides(config: AntigravityConfig): AntigravityConfig {
       env.OPENCODE_ANTIGRAVITY_PID_OFFSET_ENABLED === "true"
         ? true
         : config.pid_offset_enabled,
-
   };
 }
 
@@ -180,7 +192,7 @@ function applyEnvOverrides(config: AntigravityConfig): AntigravityConfig {
 
 /**
  * Load the complete configuration.
- * 
+ *
  * @param directory - The project directory (for project-level config)
  * @returns Fully resolved configuration
  */
@@ -226,8 +238,4 @@ let runtimeConfig: AntigravityConfig | null = null;
 
 export function initRuntimeConfig(config: AntigravityConfig): void {
   runtimeConfig = config;
-}
-
-export function getKeepThinking(): boolean {
-  return runtimeConfig?.keep_thinking ?? false;
 }

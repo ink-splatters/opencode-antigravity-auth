@@ -3,8 +3,8 @@ import type {
   StreamingCallbacks,
   StreamingOptions,
   ThoughtBuffer,
-} from './types';
-import { processImageData } from '../../image-saver';
+} from "./types";
+import { processImageData } from "../../image-saver";
 
 /**
  * Simple string hash for thinking deduplication.
@@ -13,7 +13,7 @@ import { processImageData } from '../../image-saver';
 function hashString(str: string): string {
   let hash = 5381;
   for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) + str.charCodeAt(i); /* hash * 33 + c */
+    hash = (hash << 5) + hash + str.charCodeAt(i); /* hash * 33 + c */
   }
   return (hash >>> 0).toString(16);
 }
@@ -32,9 +32,9 @@ export function transformStreamingPayload(
   transformThinkingParts?: (response: unknown) => unknown,
 ): string {
   return payload
-    .split('\n')
+    .split("\n")
     .map((line) => {
-      if (!line.startsWith('data:')) {
+      if (!line.startsWith("data:")) {
         return line;
       }
       const json = line.slice(5).trim();
@@ -52,7 +52,7 @@ export function transformStreamingPayload(
       } catch (_) {}
       return line;
     })
-    .join('\n');
+    .join("\n");
 }
 
 export function deduplicateThinkingText(
@@ -60,70 +60,72 @@ export function deduplicateThinkingText(
   sentBuffer: ThoughtBuffer,
   displayedThinkingHashes?: Set<string>,
 ): unknown {
-  if (!response || typeof response !== 'object') return response;
+  if (!response || typeof response !== "object") return response;
 
   const resp = response as Record<string, unknown>;
 
   if (Array.isArray(resp.candidates)) {
-    const newCandidates = resp.candidates.map((candidate: unknown, index: number) => {
-      const cand = candidate as Record<string, unknown> | null;
-      if (!cand?.content) return candidate;
+    const newCandidates = resp.candidates.map(
+      (candidate: unknown, index: number) => {
+        const cand = candidate as Record<string, unknown> | null;
+        if (!cand?.content) return candidate;
 
-      const content = cand.content as Record<string, unknown>;
-      if (!Array.isArray(content.parts)) return candidate;
+        const content = cand.content as Record<string, unknown>;
+        if (!Array.isArray(content.parts)) return candidate;
 
-      const newParts = content.parts.map((part: unknown) => {
-        const p = part as Record<string, unknown>;
-        
-        // Handle image data - save to disk and return file path
-        if (p.inlineData) {
-          const inlineData = p.inlineData as Record<string, unknown>;
-          const result = processImageData({
-            mimeType: inlineData.mimeType as string | undefined,
-            data: inlineData.data as string | undefined,
-          });
-          if (result) {
-            return { text: result };
+        const newParts = content.parts.map((part: unknown) => {
+          const p = part as Record<string, unknown>;
+
+          // Handle image data - save to disk and return file path
+          if (p.inlineData) {
+            const inlineData = p.inlineData as Record<string, unknown>;
+            const result = processImageData({
+              mimeType: inlineData.mimeType as string | undefined,
+              data: inlineData.data as string | undefined,
+            });
+            if (result) {
+              return { text: result };
+            }
           }
-        }
-        
-        if (p.thought === true || p.type === 'thinking') {
-          const fullText = (p.text || p.thinking || '') as string;
-          
-          if (displayedThinkingHashes) {
-            const hash = hashString(fullText);
-            if (displayedThinkingHashes.has(hash)) {
+
+          if (p.thought === true || p.type === "thinking") {
+            const fullText = (p.text || p.thinking || "") as string;
+
+            if (displayedThinkingHashes) {
+              const hash = hashString(fullText);
+              if (displayedThinkingHashes.has(hash)) {
+                sentBuffer.set(index, fullText);
+                return null;
+              }
+              displayedThinkingHashes.add(hash);
+            }
+
+            const sentText = sentBuffer.get(index) ?? "";
+
+            if (fullText.startsWith(sentText)) {
+              const delta = fullText.slice(sentText.length);
               sentBuffer.set(index, fullText);
+
+              if (delta) {
+                return { ...p, text: delta, thinking: delta };
+              }
               return null;
             }
-            displayedThinkingHashes.add(hash);
-          }
 
-          const sentText = sentBuffer.get(index) ?? '';
-
-          if (fullText.startsWith(sentText)) {
-            const delta = fullText.slice(sentText.length);
             sentBuffer.set(index, fullText);
-
-            if (delta) {
-              return { ...p, text: delta, thinking: delta };
-            }
-            return null;
+            return part;
           }
-
-          sentBuffer.set(index, fullText);
           return part;
-        }
-        return part;
-      });
+        });
 
-      const filteredParts = newParts.filter((p) => p !== null);
+        const filteredParts = newParts.filter((p) => p !== null);
 
-      return {
-        ...cand,
-        content: { ...content, parts: filteredParts },
-      };
-    });
+        return {
+          ...cand,
+          content: { ...content, parts: filteredParts },
+        };
+      },
+    );
 
     return { ...resp, candidates: newCandidates };
   }
@@ -132,9 +134,9 @@ export function deduplicateThinkingText(
     let thinkingIndex = 0;
     const newContent = resp.content.map((block: unknown) => {
       const b = block as Record<string, unknown> | null;
-      if (b?.type === 'thinking') {
-        const fullText = (b.thinking || b.text || '') as string;
-        
+      if (b?.type === "thinking") {
+        const fullText = (b.thinking || b.text || "") as string;
+
         if (displayedThinkingHashes) {
           const hash = hashString(fullText);
           if (displayedThinkingHashes.has(hash)) {
@@ -145,7 +147,7 @@ export function deduplicateThinkingText(
           displayedThinkingHashes.add(hash);
         }
 
-        const sentText = sentBuffer.get(thinkingIndex) ?? '';
+        const sentText = sentBuffer.get(thinkingIndex) ?? "";
 
         if (fullText.startsWith(sentText)) {
           const delta = fullText.slice(sentText.length);
@@ -181,7 +183,7 @@ export function transformSseLine(
   options: StreamingOptions,
   debugState: { injected: boolean },
 ): string {
-  if (!line.startsWith('data:')) {
+  if (!line.startsWith("data:")) {
     return line;
   }
   const json = line.slice(5).trim();
@@ -205,14 +207,17 @@ export function transformSseLine(
       let response: unknown = deduplicateThinkingText(
         parsed.response,
         sentThinkingBuffer,
-        options.displayedThinkingHashes
+        options.displayedThinkingHashes,
       );
 
-      if (options.debugText && callbacks.onInjectDebug && !debugState.injected) {
+      if (
+        options.debugText &&
+        callbacks.onInjectDebug &&
+        !debugState.injected
+      ) {
         response = callbacks.onInjectDebug(response, options.debugText);
         debugState.injected = true;
       }
-      // Note: onInjectSyntheticThinking removed - keep_thinking now uses debugText path
 
       const transformed = callbacks.transformThinkingParts
         ? callbacks.transformThinkingParts(response)
@@ -228,9 +233,13 @@ export function cacheThinkingSignaturesFromResponse(
   signatureSessionKey: string,
   signatureStore: SignatureStore,
   thoughtBuffer: ThoughtBuffer,
-  onCacheSignature?: (sessionKey: string, text: string, signature: string) => void,
+  onCacheSignature?: (
+    sessionKey: string,
+    text: string,
+    signature: string,
+  ) => void,
 ): void {
-  if (!response || typeof response !== 'object') return;
+  if (!response || typeof response !== "object") return;
 
   const resp = response as Record<string, unknown>;
 
@@ -243,20 +252,23 @@ export function cacheThinkingSignaturesFromResponse(
 
       content.parts.forEach((part: unknown) => {
         const p = part as Record<string, unknown>;
-        if (p.thought === true || p.type === 'thinking') {
-          const text = (p.text || p.thinking || '') as string;
+        if (p.thought === true || p.type === "thinking") {
+          const text = (p.text || p.thinking || "") as string;
           if (text) {
-            const current = thoughtBuffer.get(index) ?? '';
+            const current = thoughtBuffer.get(index) ?? "";
             thoughtBuffer.set(index, current + text);
           }
         }
 
         if (p.thoughtSignature) {
-          const fullText = thoughtBuffer.get(index) ?? '';
+          const fullText = thoughtBuffer.get(index) ?? "";
           if (fullText) {
             const signature = p.thoughtSignature as string;
             onCacheSignature?.(signatureSessionKey, fullText, signature);
-            signatureStore.set(signatureSessionKey, { text: fullText, signature });
+            signatureStore.set(signatureSessionKey, {
+              text: fullText,
+              signature,
+            });
           }
         }
       });
@@ -269,19 +281,22 @@ export function cacheThinkingSignaturesFromResponse(
     const CLAUDE_BUFFER_KEY = 0; // Use index 0 for Claude's single-stream content
     resp.content.forEach((block: unknown) => {
       const b = block as Record<string, unknown> | null;
-      if (b?.type === 'thinking') {
-        const text = (b.thinking || b.text || '') as string;
+      if (b?.type === "thinking") {
+        const text = (b.thinking || b.text || "") as string;
         if (text) {
-          const current = thoughtBuffer.get(CLAUDE_BUFFER_KEY) ?? '';
+          const current = thoughtBuffer.get(CLAUDE_BUFFER_KEY) ?? "";
           thoughtBuffer.set(CLAUDE_BUFFER_KEY, current + text);
         }
       }
       if (b?.signature) {
-        const fullText = thoughtBuffer.get(CLAUDE_BUFFER_KEY) ?? '';
+        const fullText = thoughtBuffer.get(CLAUDE_BUFFER_KEY) ?? "";
         if (fullText) {
           const signature = b.signature as string;
           onCacheSignature?.(signatureSessionKey, fullText, signature);
-          signatureStore.set(signatureSessionKey, { text: fullText, signature });
+          signatureStore.set(signatureSessionKey, {
+            text: fullText,
+            signature,
+          });
         }
       }
     });
@@ -295,7 +310,7 @@ export function createStreamingTransformer(
 ): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  let buffer = '';
+  let buffer = "";
   const thoughtBuffer = createThoughtBuffer();
   const sentThinkingBuffer = createThoughtBuffer();
   const debugState = { injected: false };
@@ -305,12 +320,12 @@ export function createStreamingTransformer(
     transform(chunk, controller) {
       buffer += decoder.decode(chunk, { stream: true });
 
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
       for (const line of lines) {
         // Quick check for usage metadata presence in the raw line
-        if (line.includes('usageMetadata')) {
+        if (line.includes("usageMetadata")) {
           hasSeenUsageMetadata = true;
         }
 
@@ -323,14 +338,14 @@ export function createStreamingTransformer(
           options,
           debugState,
         );
-        controller.enqueue(encoder.encode(transformedLine + '\n'));
+        controller.enqueue(encoder.encode(transformedLine + "\n"));
       }
     },
     flush(controller) {
       buffer += decoder.decode();
 
       if (buffer) {
-        if (buffer.includes('usageMetadata')) {
+        if (buffer.includes("usageMetadata")) {
           hasSeenUsageMetadata = true;
         }
         const transformedLine = transformSseLine(
@@ -353,10 +368,12 @@ export function createStreamingTransformer(
               promptTokenCount: 0,
               candidatesTokenCount: 0,
               totalTokenCount: 0,
-            }
-          }
+            },
+          },
         };
-        controller.enqueue(encoder.encode(`\ndata: ${JSON.stringify(syntheticUsage)}\n\n`));
+        controller.enqueue(
+          encoder.encode(`\ndata: ${JSON.stringify(syntheticUsage)}\n\n`),
+        );
       }
     },
   });
